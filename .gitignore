@@ -1,0 +1,9 @@
+node_modules/
+artifacts/
+**/bin/
+**/obj/
+src/BoyScout.Api/wwwroot/
+*.db
+*.db-shm
+*.db-wal
+.env

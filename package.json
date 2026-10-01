@@ -1,0 +1,23 @@
+{
+  "name": "boy-scout",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start:mcp": "dotnet artifacts/mcp/BoyScout.Mcp.dll",
+    "publish:mcp": "dotnet publish src/BoyScout.Mcp/BoyScout.Mcp.csproj --configuration Release --output artifacts/mcp",
+    "build:web": "npm --prefix web-ui run build",
+    "publish:ui": "npm run build:web && dotnet publish src/BoyScout.Api/BoyScout.Api.csproj --configuration Release --output artifacts/api",
+    "start:ui": "dotnet artifacts/api/BoyScout.Api.dll --contentRoot . --urls http://127.0.0.1:5187",
+    "backup:db": "node scripts/backup-database.mjs",
+    "verify:migration": "node scripts/verify-migration.mjs",
+    "test": "dotnet test BoyScout.sln && npm run test:mcp",
+    "test:mcp": "dotnet build BoyScout.sln && node tests/dotnet-mcp-smoke-test.mjs"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0"
+  }
+}
