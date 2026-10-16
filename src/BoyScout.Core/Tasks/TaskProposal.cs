@@ -29,4 +29,8 @@ public sealed record TaskProposal(
     string? LocalizedReportTitle,
     string? LocalizedReportObservation,
     string? LocalizedReportImpact,
-    string? LocalizedReportSuggestedAction);
+    string? LocalizedReportSuggestedAction,
+    string? AgentCheckedAt = null,
+    string? HumanApprovedAt = null,
+    string? HumanRejectedAt = null,
+    string? CurrentConsequences = null);

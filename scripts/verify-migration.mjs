@@ -100,6 +100,21 @@ try {
     "localized_report_impact",
     "localized_report_suggested_action",
   ].every((column) => proposalColumns.includes(column));
+  const hasAttributionColumns = ["source_name", "source_installation_id"].every((column) =>
+    live.prepare("PRAGMA table_info(reports)").all().some((row) => row.name === column),
+  ) && ["confirmer_name", "confirmer_installation_id"].every((column) =>
+    live.prepare("PRAGMA table_info(tasks)").all().some((row) => row.name === column),
+  );
+  const attributionMigrationCount = live.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 10 AND name = 'installation_authors'").get().count;
+  const decisionTimestampMigrationCount = live.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 11 AND name = 'proposal_decision_timestamps'").get().count;
+  const hasDecisionTimestamps = ["agent_checked_at", "human_approved_at", "human_rejected_at"]
+    .every((column) => proposalColumns.includes(column));
+  const consequencesMigrationCount = live.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 12 AND name = 'task_current_consequences'").get().count;
+  const hasConsequencesColumns = ["task_proposals", "tasks"].every((table) =>
+    live.prepare(`PRAGMA table_info(${table})`).all().some((column) =>
+      column.name === "current_consequences" && column.type.toUpperCase() === "TEXT" && column.notnull === 0,
+    ),
+  );
   const grantedProjectCount = live.prepare("SELECT COUNT(*) AS count FROM project_ai_access").get().count;
   const taskProposalCount = live.prepare("SELECT COUNT(*) AS count FROM task_proposals").get().count;
   const taskCount = live.prepare("SELECT COUNT(*) AS count FROM tasks").get().count;
@@ -109,7 +124,7 @@ try {
     .get()?.value;
 
   if (
-    userVersion !== 9 ||
+    userVersion !== 12 ||
     orphanReports !== 0 ||
     foreignKeyErrors !== 0 ||
     triggerCount !== 1 ||
@@ -120,13 +135,19 @@ try {
     queuedProposalMigrationCount !== 1 ||
     clarificationMigrationCount !== 1 ||
     humanDecisionMigrationCount !== 1 ||
+    attributionMigrationCount !== 1 ||
+    !hasAttributionColumns ||
+    decisionTimestampMigrationCount !== 1 ||
+    !hasDecisionTimestamps ||
+    consequencesMigrationCount !== 1 ||
+    !hasConsequencesColumns ||
     !hasReviewRequestColumns ||
     !hasDecisionColumns ||
     !proposalTableSql?.includes("'queued'") ||
     !["true", "false"].includes(aiProcessingEnabled)
   ) {
     throw new Error(
-      `Invalid migrated schema: version=${userVersion}, orphans=${orphanReports}, foreignKeyErrors=${foreignKeyErrors}, trigger=${triggerCount}, taskMigration=${taskMigrationCount}, relevanceMigration=${relevanceMigrationCount}, accessMigration=${accessMigrationCount}, rejectionReviewMigration=${rejectionReviewMigrationCount}, queuedProposalMigration=${queuedProposalMigrationCount}, clarificationMigration=${clarificationMigrationCount}, humanDecisionMigration=${humanDecisionMigrationCount}, reviewRequestColumns=${hasReviewRequestColumns}, decisionColumns=${hasDecisionColumns}, queuedState=${proposalTableSql?.includes("'queued'")}, aiProcessing=${aiProcessingEnabled}`,
+      `Invalid migrated schema: version=${userVersion}, orphans=${orphanReports}, foreignKeyErrors=${foreignKeyErrors}, trigger=${triggerCount}, taskMigration=${taskMigrationCount}, relevanceMigration=${relevanceMigrationCount}, accessMigration=${accessMigrationCount}, rejectionReviewMigration=${rejectionReviewMigrationCount}, queuedProposalMigration=${queuedProposalMigrationCount}, clarificationMigration=${clarificationMigrationCount}, humanDecisionMigration=${humanDecisionMigrationCount}, consequencesMigration=${consequencesMigrationCount}, consequencesColumns=${hasConsequencesColumns}, reviewRequestColumns=${hasReviewRequestColumns}, decisionColumns=${hasDecisionColumns}, queuedState=${proposalTableSql?.includes("'queued'")}, aiProcessing=${aiProcessingEnabled}`,
     );
   }
 

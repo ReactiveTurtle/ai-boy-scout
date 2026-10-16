@@ -3,7 +3,7 @@ using BoyScout.Core.Storage;
 
 namespace BoyScout.Core.Automation;
 
-public sealed class AutomationStore(BoyScoutDatabase database)
+public sealed class AutomationStore(BoyScoutDatabase database) : IAutomationStore
 {
     private const string AiProcessingEnabledKey = "ai_processing_enabled";
 

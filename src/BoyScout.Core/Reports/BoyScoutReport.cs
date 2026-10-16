@@ -11,4 +11,7 @@ public sealed record BoyScoutReport(
     string? DiscoveredDuring,
     string Status,
     string CreatedAt,
-    string UpdatedAt);
+    string UpdatedAt,
+    string? SourceName = null,
+    Guid? SourceInstallationId = null,
+    long? ProjectId = null);

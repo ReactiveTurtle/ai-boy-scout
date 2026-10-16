@@ -5,13 +5,13 @@ namespace BoyScout.Api.Ai;
 internal sealed class AiProcessingControl : IDisposable
 {
     private readonly Lock sync = new();
-    private readonly AutomationStore automationStore;
+    private readonly IAutomationStore automationStore;
     private Epoch? epoch;
     private CancellationTokenSource? activeGenerationSource;
     private bool enabled;
     private bool disposed;
 
-    public AiProcessingControl(OpenCodeOptions options, AutomationStore automationStore)
+    public AiProcessingControl(OpenCodeOptions options, IAutomationStore automationStore)
     {
         this.automationStore = automationStore;
         Available = options.Enabled;

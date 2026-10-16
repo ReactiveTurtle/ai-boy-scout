@@ -1,5 +1,6 @@
 using BoyScout.Core.Automation;
 using BoyScout.Core.Storage;
+using BoyScout.Core.Storage.Config;
 using BoyScout.Core.Reports;
 using BoyScout.Core.Tasks;
 using BoyScout.Api.Ai;
@@ -10,6 +11,333 @@ namespace BoyScout.Core.Tests;
 
 public sealed class BoyScoutDatabaseTests
 {
+    [Fact]
+    public void Current_consequences_round_trip_through_proposal_confirmation_and_task_search()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var reports = new ReportStore(database);
+        var report = reports.Add(NewReport(fixture.DirectoryPath, "Finding", "Observation"));
+        GrantAiAccess(reports);
+        var store = new TaskStore(database);
+        var claimed = store.TryClaimNextProposal()!;
+        Assert.Null(claimed.CurrentConsequences);
+        Assert.Throws<ArgumentException>(() => store.SaveProposal(
+            claimed.Id, "Task", "Description", "Criteria", currentConsequences: "   "));
+        var ready = store.SaveProposal(
+            claimed.Id, "Task", "Description", "Criteria", currentConsequences: "Existing users lose data");
+        Assert.Equal("Existing users lose data", ready.CurrentConsequences);
+        Assert.Equal(ready.CurrentConsequences, store.GetProposalForReport(report.Id)!.CurrentConsequences);
+        Assert.Equal(ready.CurrentConsequences, Assert.Single(store.ListReadyProposals()).CurrentConsequences);
+        var task = store.ConfirmProposal(ready.Id);
+        Assert.Equal(ready.CurrentConsequences, task.CurrentConsequences);
+        Assert.Equal(task.CurrentConsequences, Assert.Single(store.ListTasks()).CurrentConsequences);
+        Assert.Equal(task.CurrentConsequences,
+            Assert.Single(store.BrowseTasks(null, null, "lose data", null, 10).Items).CurrentConsequences);
+        Assert.Equal(task.CurrentConsequences, store.UpdateStatus(task.Id, TaskStatuses.Done)!.CurrentConsequences);
+        Assert.Null(store.ReprocessCompletedNote(report.Id, "Recheck consequences").Proposal.CurrentConsequences);
+    }
+
+    [Fact]
+    public void Consequences_are_cleared_when_a_ready_proposal_is_retried_or_redirected()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var reports = new ReportStore(database);
+        var report = reports.Add(NewReport(fixture.DirectoryPath, "Finding", "Observation"));
+        GrantAiAccess(reports);
+        var store = new TaskStore(database);
+        var claimed = store.TryClaimNextProposal()!;
+        store.SaveProposal(claimed.Id, "Task", "Description", "Criteria", currentConsequences: "Old impact");
+        Assert.Null(store.RetryProposal(claimed.Id, "Recheck consequences").CurrentConsequences);
+        claimed = store.TryClaimNextProposal()!;
+        store.SaveProposal(claimed.Id, "Task", "Description", "Criteria", currentConsequences: "Old impact");
+        Assert.Null(store.RequestClarification(report.Id, "Recheck").CurrentConsequences);
+        claimed = store.TryClaimNextProposal()!;
+        Assert.Null(store.SaveProposal(claimed.Id, "Task", "Description", "Criteria").CurrentConsequences);
+        Assert.Null(store.RequestRejectionReview(report.Id, "Obsolete").CurrentConsequences);
+    }
+
+    [Fact]
+    public void Migrate_version_eleven_preserves_rows_with_null_consequences()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var reports = new ReportStore(database);
+        reports.Add(NewReport(fixture.DirectoryPath, "Finding", "Observation"));
+        GrantAiAccess(reports);
+        var store = new TaskStore(database);
+        var proposal = store.TryClaimNextProposal()!;
+        store.SaveProposal(proposal.Id, "Task", "Description", "Criteria");
+        store.ConfirmProposal(proposal.Id);
+        fixture.DowngradeToVersionEleven();
+        database.Migrate();
+        database.Migrate();
+        Assert.Null(store.GetProposalForReport("BSR-000001")!.CurrentConsequences);
+        Assert.Null(Assert.Single(store.ListTasks()).CurrentConsequences);
+        using var verification = fixture.OpenConnection();
+        Assert.Equal(12L, Scalar<long>(verification, "PRAGMA user_version;"));
+        Assert.Equal(1L, Scalar<long>(verification,
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 12 AND name = 'task_current_consequences';"));
+    }
+
+    [Fact]
+    public void Migrate_version_twelve_rejects_missing_consequences_column()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        using (var connection = fixture.OpenConnection())
+        {
+            Execute(connection, "ALTER TABLE tasks DROP COLUMN current_consequences;");
+        }
+        Assert.Throws<InvalidOperationException>(() => database.Migrate());
+    }
+
+    [Fact]
+    public void Installation_authors_are_snapshotted_on_report_add_and_task_confirmation()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var config = new BoyScoutConfigService(Path.Combine(fixture.DirectoryPath, "config.json"));
+        var source = config.SetDisplayName("Source installation");
+        var reports = new ReportStore(database, config);
+        var report = reports.Add(NewReport(fixture.DirectoryPath, "Finding", "Observation"));
+        Assert.Equal(source.DisplayName, report.SourceName);
+        Assert.Equal(source.InstallationId, report.SourceInstallationId);
+        Assert.Equal(report, Assert.Single(reports.BrowseNotes(null, null, null, null, null, 10).Items));
+        Assert.Equal(report, Assert.Single(reports.Browse(null, null, null, null, 10).Items));
+        Assert.Equal(report, Assert.Single(reports.List(null, null, 10)));
+
+        GrantAiAccess(reports);
+        var tasks = new TaskStore(database, config);
+        var proposal = tasks.TryClaimNextProposal()!;
+        tasks.SaveProposal(proposal.Id, "Task", "Description", "Criteria");
+        var confirmer = config.SetDisplayName("Human confirmer");
+        var task = tasks.ConfirmProposal(proposal.Id);
+        Assert.Equal(confirmer.DisplayName, task.ConfirmerName);
+        Assert.Equal(confirmer.InstallationId, task.ConfirmerInstallationId);
+        Assert.Equal(task.ConfirmerName, Assert.Single(tasks.ListTasks()).ConfirmerName);
+        Assert.Equal(task.ConfirmerInstallationId, Assert.Single(tasks.BrowseTasks(null, null, null, null, 10).Items).ConfirmerInstallationId);
+        Assert.Equal(source.DisplayName, reports.Get(report.Id)!.SourceName);
+        Assert.Equal(source.InstallationId, reports.Get(report.Id)!.SourceInstallationId);
+
+        var unattributed = new ReportStore(database).Add(NewReport(fixture.DirectoryPath, "Old style", "Observation"));
+        Assert.Null(unattributed.SourceName);
+        Assert.Null(unattributed.SourceInstallationId);
+        Assert.Null(new ReportStore(database).Get(unattributed.Id)!.SourceName);
+    }
+
+    [Fact]
+    public void Migrate_version_nine_keeps_existing_rows_with_null_authors()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var report = new ReportStore(database).Add(NewReport(fixture.DirectoryPath, "Legacy", "Observation"));
+        fixture.DowngradeToVersionNine();
+        using (var connection = fixture.OpenConnection())
+        {
+            Execute(connection,
+                """
+                INSERT INTO tasks (project_id, title, description, acceptance_criteria, status, created_at, updated_at)
+                SELECT project_id, 'Old task', 'Description', 'Criteria', 'todo', created_at, updated_at FROM reports;
+                """);
+        }
+        database.Migrate();
+        database.Migrate();
+        Assert.Null(new ReportStore(database).Get(report.Id)!.SourceName);
+        Assert.Null(new ReportStore(database).Get(report.Id)!.SourceInstallationId);
+        var oldTask = Assert.Single(new TaskStore(database).ListTasks());
+        Assert.Null(oldTask.ConfirmerName);
+        Assert.Null(oldTask.ConfirmerInstallationId);
+        using var verification = fixture.OpenConnection();
+        Assert.Equal(12L, Scalar<long>(verification, "PRAGMA user_version;"));
+        Assert.Equal(12L, Scalar<long>(verification, "SELECT COUNT(*) FROM schema_migrations;"));
+    }
+
+    [Fact]
+    public void Migrate_version_ten_preserves_proposals_without_inventing_decision_dates()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var reports = new ReportStore(database);
+        var first = reports.Add(NewReport(fixture.DirectoryPath, "Legacy ready", "Observation"));
+        var second = reports.Add(NewReport(fixture.DirectoryPath, "Legacy rejected", "Observation"));
+        GrantAiAccess(reports);
+        var store = new TaskStore(database);
+        var ready = store.TryClaimNextProposal()!;
+        store.SaveProposal(ready.Id, "Task", "Description", "Criteria");
+        var rejected = store.TryClaimNextProposal()!;
+        store.SaveRejectionRecommendation(rejected.Id, "Obsolete", "Checked");
+        store.ConfirmRejection(rejected.Id);
+        fixture.DowngradeToVersionTen();
+
+        database.Migrate();
+        database.Migrate();
+
+        Assert.Equal("Task", store.GetProposalForReport(first.Id)!.Title);
+        Assert.Equal(TaskProposalStates.Rejected, store.GetProposalForReport(second.Id)!.State);
+        foreach (var proposal in new[] { store.GetProposalForReport(first.Id)!, store.GetProposalForReport(second.Id)! })
+        {
+            Assert.Null(proposal.AgentCheckedAt);
+            Assert.Null(proposal.HumanApprovedAt);
+            Assert.Null(proposal.HumanRejectedAt);
+        }
+        using var connection = fixture.OpenConnection();
+        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(12L, Scalar<long>(connection, "SELECT COUNT(*) FROM schema_migrations;"));
+        Assert.Equal(1L, Scalar<long>(connection,
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 11 AND name = 'proposal_decision_timestamps';"));
+    }
+
+    [Fact]
+    public void Migrate_version_eleven_rejects_missing_decision_timestamp_column()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        using (var connection = fixture.OpenConnection())
+        {
+            Execute(connection, "ALTER TABLE task_proposals DROP COLUMN human_rejected_at;");
+        }
+
+        Assert.Throws<InvalidOperationException>(() => database.Migrate());
+    }
+
+    [Fact]
+    public void Decision_dates_are_written_only_by_agent_verdict_and_human_confirmation()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var reports = new ReportStore(database);
+        var approvedReport = reports.Add(NewReport(fixture.DirectoryPath, "Approve", "Observation"));
+        var rejectedReport = reports.Add(NewReport(fixture.DirectoryPath, "Reject", "Observation"));
+        var unverifiedReport = reports.Add(NewReport(fixture.DirectoryPath, "Unverified", "Observation"));
+        var failedReport = reports.Add(NewReport(fixture.DirectoryPath, "Failed", "Observation"));
+        GrantAiAccess(reports);
+        var store = new TaskStore(database);
+
+        var approved = store.TryClaimNextProposal()!;
+        Assert.Null(approved.AgentCheckedAt);
+        Assert.Null(approved.HumanApprovedAt);
+        approved = store.SaveProposal(approved.Id, "Task", "Description", "Criteria");
+        Assert.Equal(approved.UpdatedAt, approved.AgentCheckedAt);
+        Assert.Null(approved.HumanApprovedAt);
+        store.ConfirmProposal(approved.Id);
+        approved = store.GetProposalForReport(approvedReport.Id)!;
+        Assert.Equal(approved.UpdatedAt, approved.HumanApprovedAt);
+        Assert.NotNull(approved.AgentCheckedAt);
+        Assert.Null(approved.HumanRejectedAt);
+
+        var rejected = store.TryClaimNextProposal()!;
+        rejected = store.SaveRejectionRecommendation(rejected.Id, "Obsolete", "Checked");
+        Assert.Equal(rejected.UpdatedAt, rejected.AgentCheckedAt);
+        Assert.Null(rejected.HumanRejectedAt);
+        rejected = store.ConfirmRejection(rejected.Id);
+        Assert.Equal(rejected.UpdatedAt, rejected.HumanRejectedAt);
+        Assert.Null(rejected.HumanApprovedAt);
+
+        var unverified = store.TryClaimNextProposal()!;
+        unverified = store.MarkUnverified(unverified.Id, "Cannot check");
+        Assert.Equal(unverified.UpdatedAt, unverified.AgentCheckedAt);
+        Assert.Null(unverified.HumanApprovedAt);
+        Assert.Null(unverified.HumanRejectedAt);
+        var failed = store.TryClaimNextProposal()!;
+        failed = store.FailProposal(failed.Id, "Agent error");
+        Assert.Null(failed.AgentCheckedAt);
+
+        foreach (var report in new[] { approvedReport, rejectedReport, unverifiedReport, failedReport })
+        {
+            var proposal = store.GetProposalForReport(report.Id)!;
+            var single = store.GetNoteWorkflow(report.Id)!;
+            var batch = Assert.Single(store.GetNoteWorkflows([report.Id]));
+            Assert.Equal(proposal.AgentCheckedAt, single.AgentCheckedAt);
+            Assert.Equal(proposal.HumanApprovedAt, single.HumanApprovedAt);
+            Assert.Equal(proposal.HumanRejectedAt, single.HumanRejectedAt);
+            Assert.Equal(single, batch);
+        }
+
+        reports.UpdateStatus(unverifiedReport.Id, ReportStatuses.Dismissed);
+        Assert.Null(store.GetProposalForReport(unverifiedReport.Id)!.HumanRejectedAt);
+        Assert.Null(store.GetNoteWorkflow(unverifiedReport.Id)!.HumanRejectedAt);
+    }
+
+    [Fact]
+    public void New_review_cycles_clear_prior_decision_dates()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var reports = new ReportStore(database);
+        var report = reports.Add(NewReport(fixture.DirectoryPath, "Cycle", "Observation"));
+        GrantAiAccess(reports);
+        var store = new TaskStore(database);
+        var proposal = store.TryClaimNextProposal()!;
+        store.SaveProposal(proposal.Id, "Task", "Description", "Criteria");
+        Assert.Null(store.RetryProposal(proposal.Id, "Recheck result").AgentCheckedAt);
+        proposal = store.TryClaimNextProposal()!;
+        store.MarkUnverified(proposal.Id, "Uncertain");
+        Assert.Null(store.RequestClarification(report.Id, "Check again").AgentCheckedAt);
+        proposal = store.TryClaimNextProposal()!;
+        Assert.Null(store.RequeueProcessingProposal(proposal.Id, "Recheck result").AgentCheckedAt);
+        proposal = store.TryClaimNextProposal()!;
+        store.SaveProposal(proposal.Id, "Task", "Description", "Criteria");
+        Assert.Null(store.RequestRejectionReview(report.Id, "Obsolete?").AgentCheckedAt);
+        proposal = store.TryClaimNextProposal()!;
+        store.SaveRejectionRecommendation(proposal.Id, "Obsolete", "Checked");
+        store.ConfirmRejection(proposal.Id);
+        var restored = store.RestoreRejectedNote(report.Id, "Recheck result");
+        Assert.Null(restored.Proposal.AgentCheckedAt);
+        Assert.Null(restored.Proposal.HumanRejectedAt);
+        Assert.Null(restored.Workflow.HumanRejectedAt);
+        proposal = store.TryClaimNextProposal()!;
+        store.SaveProposal(proposal.Id, "New task", "Description", "Criteria");
+        store.ConfirmProposal(proposal.Id);
+        var reprocessed = store.ReprocessCompletedNote(report.Id, "Recheck result");
+        Assert.Null(reprocessed.Proposal.AgentCheckedAt);
+        Assert.Null(reprocessed.Proposal.HumanApprovedAt);
+        Assert.Null(reprocessed.Workflow.HumanApprovedAt);
+    }
+
+    [Fact]
+    public void CreateProject_registers_empty_project_and_reuses_its_path_for_new_reports()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var store = new ReportStore(database);
+
+        var project = store.CreateProject("  Shared code  ", fixture.DirectoryPath);
+
+        Assert.Equal("Shared code", project.Name);
+        Assert.Equal(0, project.ReportCount);
+        Assert.False(project.AiAccessGranted);
+        Assert.Equal(project, Assert.Single(store.ListProjects()));
+        store.Add(NewReport(fixture.DirectoryPath, "A note", "Observation"));
+        Assert.Equal(project.Id, Assert.Single(store.ListProjects()).Id);
+        Assert.Throws<InvalidOperationException>(() => store.CreateProject("Duplicate", fixture.DirectoryPath));
+        Assert.Single(store.ListProjects());
+    }
+
+    [Fact]
+    public void CreateProject_rejects_missing_directory_without_creating_project()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var store = new ReportStore(database);
+
+        Assert.Throws<ArgumentException>(() => store.CreateProject("Missing", Path.Combine(fixture.DirectoryPath, "missing")));
+        Assert.Empty(store.ListProjects());
+    }
+
     [Fact]
     public void Browse_returns_filtered_cursor_pages_with_explicit_total()
     {
@@ -221,9 +549,9 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var connection = fixture.OpenConnection();
-        Assert.Equal(9L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
         Assert.Equal("wal", Scalar<string>(connection, "PRAGMA journal_mode;"));
-        Assert.Equal(9L, Scalar<long>(connection, "SELECT COUNT(*) FROM schema_migrations;"));
+        Assert.Equal(12L, Scalar<long>(connection, "SELECT COUNT(*) FROM schema_migrations;"));
         Assert.Equal(0L, Scalar<long>(connection, "SELECT COUNT(*) FROM reports;"));
         Assert.Equal(0L, Scalar<long>(connection, "SELECT COUNT(*) FROM projects;"));
         Assert.Equal(0L, Scalar<long>(connection, "SELECT COUNT(*) FROM task_proposals;"));
@@ -292,7 +620,7 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var connection = fixture.OpenConnection();
-        Assert.Equal(9L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
         Assert.Equal(1L, Scalar<long>(connection, "SELECT COUNT(*) FROM reports;"));
         Assert.Equal(168L, Scalar<long>(connection, "SELECT MAX(sequence) FROM reports;"));
         Assert.Equal(1L, Scalar<long>(connection, "SELECT COUNT(*) FROM projects;"));
@@ -327,7 +655,7 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var connection = fixture.OpenConnection();
-        Assert.Equal(9L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
         Assert.Equal(1L, Scalar<long>(connection, "SELECT COUNT(*) FROM reports;"));
         Assert.Equal(
             report.Title,
@@ -376,7 +704,7 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var verificationConnection = fixture.OpenConnection();
-        Assert.Equal(9L, Scalar<long>(verificationConnection, "PRAGMA user_version;"));
+        Assert.Equal(12L, Scalar<long>(verificationConnection, "PRAGMA user_version;"));
         Assert.Equal(
             1L,
             Scalar<long>(
@@ -418,7 +746,7 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var connection = fixture.OpenConnection();
-        Assert.Equal(9L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
         Assert.Equal(report.Title, Scalar<string>(connection, "SELECT title FROM reports WHERE sequence = 1;"));
         Assert.Equal(0L, Scalar<long>(connection, "SELECT COUNT(*) FROM project_ai_access;"));
         Assert.Equal(
@@ -464,7 +792,7 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var connection = fixture.OpenConnection();
-        Assert.Equal(9L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
         Assert.Equal(
             1L,
             Scalar<long>(
@@ -496,7 +824,7 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var connection = fixture.OpenConnection();
-        Assert.Equal(9L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
         Assert.Equal(
             1L,
             Scalar<long>(
@@ -527,7 +855,7 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var connection = fixture.OpenConnection();
-        Assert.Equal(9L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
         Assert.Equal(
             1L,
             Scalar<long>(
@@ -596,7 +924,7 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var connection = fixture.OpenConnection();
-        Assert.Equal(9L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
         Assert.Equal(
             TaskProposalRecommendedActions.CreateTask,
             Scalar<string>(connection, $"SELECT recommended_action FROM task_proposals WHERE id = {current.Id};"));
@@ -657,6 +985,8 @@ public sealed class BoyScoutDatabaseTests
 
         Assert.Equal("BST-000001", task.Id);
         Assert.Equal(TaskStatuses.Todo, task.Status);
+        Assert.Null(task.ConfirmerName);
+        Assert.Null(task.ConfirmerInstallationId);
         Assert.Equal([report.Id], task.SourceReportIds);
         Assert.Empty(store.ListReadyProposals());
         Assert.Equal(ReportStatuses.Resolved, reportStore.Get(report.Id)!.Status);
@@ -701,7 +1031,7 @@ public sealed class BoyScoutDatabaseTests
         var task = store.ConfirmProposal(proposal.Id);
         Assert.True(reportStore.SetAiAccess(proposal.ProjectId, false));
 
-        var reprocessed = store.ReprocessCompletedNote(report.Id);
+        var reprocessed = store.ReprocessCompletedNote(report.Id, "Recheck result");
 
         Assert.Equal(task.Id, reprocessed.DeletedTaskId);
         Assert.Equal("new", reprocessed.Workflow.NoteState);
@@ -711,7 +1041,7 @@ public sealed class BoyScoutDatabaseTests
         Assert.Equal(TaskProposalStates.Queued, reprocessed.Proposal.State);
         Assert.Equal(TaskProposalReviewIntents.Proposal, reprocessed.Proposal.ReviewIntent);
         Assert.Null(reprocessed.Proposal.RequestedRejectionReason);
-        Assert.Null(reprocessed.Proposal.RequestedClarification);
+        Assert.Equal("Recheck result", reprocessed.Proposal.RequestedClarification);
         Assert.Null(reprocessed.Proposal.Relevance);
         Assert.Null(reprocessed.Proposal.RecommendedAction);
         Assert.Null(reprocessed.Proposal.FinalRejectionReason);
@@ -729,6 +1059,87 @@ public sealed class BoyScoutDatabaseTests
         using var connection = fixture.OpenConnection();
         Assert.Equal(0L, Scalar<long>(connection, "SELECT COUNT(*) FROM report_tasks;"));
         Assert.Equal(0L, Scalar<long>(connection, "SELECT COUNT(*) FROM tasks;"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReprocessCompletedNote_comment_is_persisted_for_existing_and_legacy_proposals(bool existingProposal)
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var reportStore = new ReportStore(database);
+        var report = reportStore.Add(NewReport(fixture.DirectoryPath, "Finding", "Observation"));
+        var store = new TaskStore(database);
+        if (existingProposal)
+        {
+            GrantAiAccess(reportStore);
+            var proposal = store.TryClaimNextProposal()!;
+            store.SaveProposal(proposal.Id, "Task", "Description", "Criteria");
+            store.ConfirmProposal(proposal.Id);
+        }
+        else
+        {
+            reportStore.UpdateStatus(report.Id, ReportStatuses.Resolved);
+        }
+
+        var reprocessed = store.ReprocessCompletedNote(report.Id, "  Check the current implementation  ");
+
+        Assert.Equal(TaskProposalStates.Queued, reprocessed.Proposal.State);
+        Assert.Equal(TaskProposalReviewIntents.Proposal, reprocessed.Proposal.ReviewIntent);
+        Assert.Null(reprocessed.Proposal.RequestedRejectionReason);
+        Assert.Null(reprocessed.Proposal.HumanApprovedAt);
+        Assert.Equal("Check the current implementation", store.GetProposalForReport(report.Id)!.RequestedClarification);
+        Assert.Equal(ReportStatuses.Open, reportStore.Get(report.Id)!.Status);
+        if (!existingProposal)
+        {
+            Assert.Null(store.TryClaimNextProposal());
+            GrantAiAccess(reportStore);
+        }
+        Assert.Contains("\"requestedClarification\":\"Check the current implementation\"",
+            OpenCodeProposalGenerator.BuildPrompt(store.TryClaimNextProposal()!, fixture.DirectoryPath, true));
+        store.SaveProposal(reprocessed.Proposal.Id, "Rechecked task", "Description", "Criteria");
+        Assert.Equal("Check the current implementation",
+            store.GetProposalForReport(report.Id)!.RequestedClarification);
+        store.ConfirmProposal(reprocessed.Proposal.Id);
+        Assert.Equal("Check the current implementation",
+            store.GetProposalForReport(report.Id)!.RequestedClarification);
+    }
+
+    [Fact]
+    public void ReprocessCompletedNote_rejects_oversized_comment_without_reopening()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var reportStore = new ReportStore(database);
+        var report = reportStore.Add(NewReport(fixture.DirectoryPath, "Finding", "Observation"));
+        reportStore.UpdateStatus(report.Id, ReportStatuses.Resolved);
+        var store = new TaskStore(database);
+
+        Assert.Throws<ArgumentException>(() => store.ReprocessCompletedNote(report.Id,
+            new string('x', TaskStore.MaximumClarificationLength + 1)));
+        Assert.Equal(ReportStatuses.Resolved, reportStore.Get(report.Id)!.Status);
+        Assert.Null(store.GetProposalForReport(report.Id));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("   ")]
+    public void ReprocessCompletedNote_requires_comment_before_reopening(string? comment)
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var reportStore = new ReportStore(database);
+        var report = reportStore.Add(NewReport(fixture.DirectoryPath, "Finding", "Observation"));
+        reportStore.UpdateStatus(report.Id, ReportStatuses.Resolved);
+        var store = new TaskStore(database);
+
+        Assert.Throws<ArgumentException>(() => store.ReprocessCompletedNote(report.Id, comment!));
+        Assert.Equal(ReportStatuses.Resolved, reportStore.Get(report.Id)!.Status);
+        Assert.Null(store.GetProposalForReport(report.Id));
     }
 
     [Fact]
@@ -752,7 +1163,7 @@ public sealed class BoyScoutDatabaseTests
                 "INSERT INTO report_tasks (report_sequence, task_sequence) VALUES (2, 1);");
         }
 
-        var exception = Assert.Throws<InvalidOperationException>(() => store.ReprocessCompletedNote(report.Id));
+        var exception = Assert.Throws<InvalidOperationException>(() => store.ReprocessCompletedNote(report.Id, "Recheck result"));
 
         Assert.Equal("A task shared by multiple reports cannot be deleted for reprocessing.", exception.Message);
         Assert.Equal(ReportStatuses.Resolved, reportStore.Get(report.Id)!.Status);
@@ -781,7 +1192,7 @@ public sealed class BoyScoutDatabaseTests
             Execute(connection, "DELETE FROM report_tasks;");
         }
 
-        var reprocessed = store.ReprocessCompletedNote(report.Id);
+        var reprocessed = store.ReprocessCompletedNote(report.Id, "Recheck result");
 
         Assert.Null(reprocessed.DeletedTaskId);
         Assert.Equal("queued", reprocessed.Workflow.ReviewState);
@@ -801,7 +1212,7 @@ public sealed class BoyScoutDatabaseTests
         reportStore.UpdateStatus(report.Id, ReportStatuses.Resolved);
         var store = new TaskStore(database);
 
-        var reprocessed = store.ReprocessCompletedNote(report.Id);
+        var reprocessed = store.ReprocessCompletedNote(report.Id, "Recheck result");
 
         Assert.Null(reprocessed.DeletedTaskId);
         Assert.Equal("queued", reprocessed.Workflow.ReviewState);
@@ -836,7 +1247,7 @@ public sealed class BoyScoutDatabaseTests
                 """);
         }
 
-        var exception = Assert.Throws<InvalidOperationException>(() => store.ReprocessCompletedNote(report.Id));
+        var exception = Assert.Throws<InvalidOperationException>(() => store.ReprocessCompletedNote(report.Id, "Recheck result"));
 
         Assert.Equal(
             "A resolved report with an existing processing proposal cannot be reprocessed.",
@@ -873,7 +1284,7 @@ public sealed class BoyScoutDatabaseTests
         }
         var store = new TaskStore(database);
 
-        var reprocessed = store.ReprocessCompletedNote(report.Id);
+        var reprocessed = store.ReprocessCompletedNote(report.Id, "Recheck result");
 
         Assert.Equal("BST-000001", reprocessed.DeletedTaskId);
         Assert.Equal("queued", reprocessed.Workflow.ReviewState);
@@ -895,9 +1306,9 @@ public sealed class BoyScoutDatabaseTests
         var open = reportStore.Add(NewReport(fixture.DirectoryPath, "Open", "Observation"));
         var store = new TaskStore(database);
 
-        Assert.Throws<ArgumentException>(() => store.ReprocessCompletedNote("invalid"));
-        Assert.Throws<KeyNotFoundException>(() => store.ReprocessCompletedNote("BSR-999999"));
-        var exception = Assert.Throws<InvalidOperationException>(() => store.ReprocessCompletedNote(open.Id));
+        Assert.Throws<ArgumentException>(() => store.ReprocessCompletedNote("invalid", "Recheck result"));
+        Assert.Throws<KeyNotFoundException>(() => store.ReprocessCompletedNote("BSR-999999", "Recheck result"));
+        var exception = Assert.Throws<InvalidOperationException>(() => store.ReprocessCompletedNote(open.Id, "Recheck result"));
         Assert.Equal("Only a resolved report can be reprocessed.", exception.Message);
         Assert.Equal(ReportStatuses.Open, reportStore.Get(open.Id)!.Status);
     }
@@ -1025,17 +1436,17 @@ public sealed class BoyScoutDatabaseTests
         GrantAiAccess(reportStore);
         var store = new TaskStore(database);
         var proposal = store.TryClaimNextProposal()!;
-        Assert.Throws<InvalidOperationException>(() => store.RetryProposal(proposal.Id));
+        Assert.Throws<InvalidOperationException>(() => store.RetryProposal(proposal.Id, "Recheck result"));
 
         var failed = store.FailProposal(proposal.Id, "AI request failed");
 
         Assert.Equal(TaskProposalStates.Failed, failed.State);
         Assert.Equal("AI request failed", failed.Error);
-        var retried = store.RetryProposal(proposal.Id);
+        var retried = store.RetryProposal(proposal.Id, "Recheck result");
         Assert.Equal(TaskProposalStates.Queued, retried.State);
         Assert.Null(retried.Error);
         Assert.Equal(2, retried.Attempts);
-        Assert.Throws<InvalidOperationException>(() => store.RetryProposal(proposal.Id));
+        Assert.Throws<InvalidOperationException>(() => store.RetryProposal(proposal.Id, "Recheck result"));
         Assert.Equal(proposal.Id, store.TryClaimNextProposal()!.Id);
 
         store.SaveProposal(
@@ -1044,7 +1455,7 @@ public sealed class BoyScoutDatabaseTests
             "Bad description",
             "Bad criteria",
             "Bad verification");
-        var retriedReady = store.RetryProposal(proposal.Id);
+        var retriedReady = store.RetryProposal(proposal.Id, "Recheck result");
         Assert.Equal(TaskProposalStates.Queued, retriedReady.State);
         Assert.Null(retriedReady.Relevance);
         Assert.Null(retriedReady.VerificationSummary);
@@ -1057,11 +1468,11 @@ public sealed class BoyScoutDatabaseTests
         Assert.Equal(proposal.Id, store.TryClaimNextProposal()!.Id);
         store.SaveProposal(proposal.Id, "Task", "Description", "Acceptance criteria");
         store.ConfirmProposal(proposal.Id);
-        Assert.Throws<InvalidOperationException>(() => store.RetryProposal(proposal.Id));
+        Assert.Throws<InvalidOperationException>(() => store.RetryProposal(proposal.Id, "Recheck result"));
     }
 
     [Fact]
-    public void RequeueProcessingProposal_preserves_request_and_rejects_stale_generation_result()
+    public void RequeueProcessingProposal_replaces_request_and_rejects_stale_generation_result()
     {
         using var fixture = new DatabaseFixture();
         var database = new BoyScoutDatabase(fixture.DatabasePath);
@@ -1073,18 +1484,106 @@ public sealed class BoyScoutDatabaseTests
         var queued = store.RequestRejectionReview(report.Id, "Проверить удаление ветки.");
         var processing = store.TryClaimNextProposal()!;
 
-        var requeued = store.RequeueProcessingProposal(processing.Id);
+        var requeued = store.RequeueProcessingProposal(processing.Id, "Recheck new evidence");
 
         Assert.Equal(TaskProposalStates.Queued, requeued.State);
-        Assert.Equal(queued.ReviewIntent, requeued.ReviewIntent);
-        Assert.Equal(queued.RequestedRejectionReason, requeued.RequestedRejectionReason);
+        Assert.Equal(TaskProposalReviewIntents.Proposal, requeued.ReviewIntent);
+        Assert.Null(requeued.RequestedRejectionReason);
+        Assert.Equal("Recheck new evidence", requeued.RequestedClarification);
         Assert.Equal(queued.Attempts, requeued.Attempts);
         Assert.Throws<InvalidOperationException>(
             () => store.SaveProposal(processing.Id, "Устаревшая задача", "Описание", "Критерии"));
         Assert.Throws<InvalidOperationException>(
             () => store.SaveRejectionRecommendation(processing.Id, "Причина", "Проверка"));
-        Assert.Throws<InvalidOperationException>(() => store.RequeueProcessingProposal(processing.Id));
+        Assert.Throws<InvalidOperationException>(() => store.RequeueProcessingProposal(processing.Id, "Recheck new evidence"));
         Assert.Equal(processing.Id, store.TryClaimNextProposal()!.Id);
+    }
+
+    [Fact]
+    public void RequeueProcessingProposal_comment_replaces_rejection_intent_and_reaches_prompt()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var reportStore = new ReportStore(database);
+        var report = reportStore.Add(NewReport(fixture.DirectoryPath, "Finding", "Observation"));
+        GrantAiAccess(reportStore);
+        var store = new TaskStore(database);
+        var requested = store.RequestRejectionReview(report.Id, "Old rejection reason");
+        store.TryClaimNextProposal();
+
+        var requeued = store.RequeueProcessingProposal(requested.Id, "  Check the new code path  ");
+
+        Assert.Equal(TaskProposalReviewIntents.Proposal, requeued.ReviewIntent);
+        Assert.Null(requeued.RequestedRejectionReason);
+        Assert.Equal("Check the new code path", requeued.RequestedClarification);
+        Assert.Equal(requeued.RequestedClarification, store.GetProposalForReport(report.Id)!.RequestedClarification);
+        var claimed = store.TryClaimNextProposal()!;
+        Assert.Contains("\"requestedClarification\":\"Check the new code path\"",
+            OpenCodeProposalGenerator.BuildPrompt(claimed, fixture.DirectoryPath, true));
+        Assert.Equal(TaskProposalReviewIntents.Proposal, claimed.ReviewIntent);
+        Assert.Equal(ReportStatuses.Open, reportStore.Get(report.Id)!.Status);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("   ")]
+    public void RequeueProcessingProposal_empty_comment_is_rejected_without_changing_state(string? comment)
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var reportStore = new ReportStore(database);
+        var report = reportStore.Add(NewReport(fixture.DirectoryPath, "Finding", "Observation"));
+        GrantAiAccess(reportStore);
+        var store = new TaskStore(database);
+        var processing = store.TryClaimNextProposal()!;
+        store.MarkUnverified(processing.Id, "Needs more evidence");
+        store.RequestClarification(report.Id, "Previous clarification");
+        store.TryClaimNextProposal();
+
+        Assert.Throws<ArgumentException>(() => store.RequeueProcessingProposal(processing.Id, comment!));
+        Assert.Equal(TaskProposalStates.Processing, store.GetProposalForReport(report.Id)!.State);
+        Assert.Equal("Previous clarification", store.GetProposalForReport(report.Id)!.RequestedClarification);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("   ")]
+    public void RetryProposal_requires_comment_without_changing_state(string? comment)
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var reportStore = new ReportStore(database);
+        var report = reportStore.Add(NewReport(fixture.DirectoryPath, "Finding", "Observation"));
+        GrantAiAccess(reportStore);
+        var store = new TaskStore(database);
+        var proposal = store.TryClaimNextProposal()!;
+        store.FailProposal(proposal.Id, "Failed");
+
+        Assert.Throws<ArgumentException>(() => store.RetryProposal(proposal.Id, comment!));
+        Assert.Equal(TaskProposalStates.Failed, store.GetProposalForReport(report.Id)!.State);
+    }
+
+    [Fact]
+    public void RequeueProcessingProposal_rejects_oversized_comment_without_changing_state()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var reportStore = new ReportStore(database);
+        var report = reportStore.Add(NewReport(fixture.DirectoryPath, "Finding", "Observation"));
+        GrantAiAccess(reportStore);
+        var store = new TaskStore(database);
+        var processing = store.TryClaimNextProposal()!;
+
+        Assert.Throws<ArgumentException>(() => store.RequeueProcessingProposal(
+            processing.Id, new string('x', TaskStore.MaximumClarificationLength + 1)));
+        Assert.Equal(TaskProposalStates.Processing, store.GetProposalForReport(report.Id)!.State);
+        Assert.Equal(TaskStore.MaximumClarificationLength,
+            store.RequeueProcessingProposal(processing.Id,
+                $"  {new string('x', TaskStore.MaximumClarificationLength)}  ").RequestedClarification!.Length);
     }
 
     [Fact]
@@ -1308,7 +1807,7 @@ public sealed class BoyScoutDatabaseTests
         Assert.Equal(thirdReport.Id, next.ReportId);
         Assert.Equal(next.Id, store.GetCurrentProposal()!.Id);
 
-        var retried = store.RetryProposal(unverified.Id);
+        var retried = store.RetryProposal(unverified.Id, "Recheck evidence");
         Assert.Equal(TaskProposalStates.Queued, retried.State);
         Assert.Null(retried.Relevance);
         Assert.Null(retried.VerificationSummary);
@@ -1594,14 +2093,14 @@ public sealed class BoyScoutDatabaseTests
         store.SaveRejectionRecommendation(proposal.Id, "Причина подтверждена.", "Проверка завершена.");
         store.ConfirmRejection(proposal.Id);
 
-        var restored = store.RestoreRejectedNote(report.Id);
+        var restored = store.RestoreRejectedNote(report.Id, "Recheck evidence");
 
         Assert.Equal(ReportStatuses.Open, reportStore.Get(report.Id)!.Status);
         Assert.Equal("queued", restored.Workflow.ReviewState);
         Assert.Equal(TaskProposalStates.Queued, restored.Proposal.State);
         Assert.Equal(TaskProposalReviewIntents.Proposal, restored.Proposal.ReviewIntent);
         Assert.Null(restored.Proposal.RequestedRejectionReason);
-        Assert.Null(restored.Proposal.RequestedClarification);
+        Assert.Equal("Recheck evidence", restored.Proposal.RequestedClarification);
         Assert.Null(restored.Proposal.Relevance);
         Assert.Null(restored.Proposal.VerificationSummary);
         Assert.Null(restored.Proposal.Title);
@@ -1612,6 +2111,82 @@ public sealed class BoyScoutDatabaseTests
         var claimed = store.TryClaimNextProposal()!;
         Assert.Equal(restored.Proposal.Id, claimed.Id);
         Assert.Equal(restored.Proposal.Attempts, claimed.Attempts);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RestoreRejectedNote_comment_is_persisted_for_existing_and_legacy_proposals(bool existingProposal)
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var reportStore = new ReportStore(database);
+        var report = reportStore.Add(NewReport(fixture.DirectoryPath, "Finding", "Observation"));
+        var store = new TaskStore(database);
+        if (existingProposal)
+        {
+            GrantAiAccess(reportStore);
+            var proposal = store.RequestRejectionReview(report.Id, "Old rejection reason");
+            store.TryClaimNextProposal();
+            store.SaveRejectionRecommendation(proposal.Id, "Confirmed reason", "Verified");
+            store.ConfirmRejection(proposal.Id);
+        }
+        else
+        {
+            reportStore.UpdateStatus(report.Id, ReportStatuses.Dismissed);
+        }
+
+        var restored = store.RestoreRejectedNote(report.Id, "  Revisit the evidence  ");
+
+        Assert.Equal(TaskProposalStates.Queued, restored.Proposal.State);
+        Assert.Equal(TaskProposalReviewIntents.Proposal, restored.Proposal.ReviewIntent);
+        Assert.Null(restored.Proposal.RequestedRejectionReason);
+        Assert.Null(restored.Proposal.FinalRejectionReason);
+        Assert.Equal("Revisit the evidence", store.GetProposalForReport(report.Id)!.RequestedClarification);
+        Assert.Equal(ReportStatuses.Open, reportStore.Get(report.Id)!.Status);
+        if (!existingProposal)
+        {
+            Assert.Null(store.TryClaimNextProposal());
+            GrantAiAccess(reportStore);
+        }
+        Assert.Contains("\"requestedClarification\":\"Revisit the evidence\"",
+            OpenCodeProposalGenerator.BuildPrompt(store.TryClaimNextProposal()!, fixture.DirectoryPath, true));
+    }
+
+    [Fact]
+    public void RestoreRejectedNote_rejects_oversized_comment_without_restoring()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var reportStore = new ReportStore(database);
+        var report = reportStore.Add(NewReport(fixture.DirectoryPath, "Finding", "Observation"));
+        reportStore.UpdateStatus(report.Id, ReportStatuses.Dismissed);
+        var store = new TaskStore(database);
+
+        Assert.Throws<ArgumentException>(() => store.RestoreRejectedNote(report.Id,
+            new string('x', TaskStore.MaximumClarificationLength + 1)));
+        Assert.Equal(ReportStatuses.Dismissed, reportStore.Get(report.Id)!.Status);
+        Assert.Null(store.GetProposalForReport(report.Id));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("   ")]
+    public void RestoreRejectedNote_requires_comment_before_restoring(string? comment)
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var reportStore = new ReportStore(database);
+        var report = reportStore.Add(NewReport(fixture.DirectoryPath, "Finding", "Observation"));
+        reportStore.UpdateStatus(report.Id, ReportStatuses.Dismissed);
+        var store = new TaskStore(database);
+
+        Assert.Throws<ArgumentException>(() => store.RestoreRejectedNote(report.Id, comment!));
+        Assert.Equal(ReportStatuses.Dismissed, reportStore.Get(report.Id)!.Status);
+        Assert.Null(store.GetProposalForReport(report.Id));
     }
 
     [Fact]
@@ -1625,7 +2200,7 @@ public sealed class BoyScoutDatabaseTests
         reportStore.UpdateStatus(report.Id, ReportStatuses.Dismissed);
         var store = new TaskStore(database);
 
-        var restored = store.RestoreRejectedNote(report.Id);
+        var restored = store.RestoreRejectedNote(report.Id, "Recheck evidence");
 
         Assert.Equal(ReportStatuses.Open, reportStore.Get(report.Id)!.Status);
         Assert.Equal("queued", restored.Workflow.ReviewState);
@@ -1650,8 +2225,8 @@ public sealed class BoyScoutDatabaseTests
         var open = reportStore.Add(NewReport(fixture.DirectoryPath, "Open", "Observation"));
         var store = new TaskStore(database);
 
-        Assert.Throws<KeyNotFoundException>(() => store.RestoreRejectedNote("BSR-999999"));
-        var exception = Assert.Throws<InvalidOperationException>(() => store.RestoreRejectedNote(open.Id));
+        Assert.Throws<KeyNotFoundException>(() => store.RestoreRejectedNote("BSR-999999", "Recheck evidence"));
+        var exception = Assert.Throws<InvalidOperationException>(() => store.RestoreRejectedNote(open.Id, "Recheck evidence"));
         Assert.Equal("Only a dismissed report can be restored.", exception.Message);
     }
 
@@ -1668,7 +2243,7 @@ public sealed class BoyScoutDatabaseTests
         var proposal = store.TryClaimNextProposal()!;
         reportStore.UpdateStatus(report.Id, ReportStatuses.Dismissed);
 
-        var exception = Assert.Throws<InvalidOperationException>(() => store.RestoreRejectedNote(report.Id));
+        var exception = Assert.Throws<InvalidOperationException>(() => store.RestoreRejectedNote(report.Id, "Recheck evidence"));
 
         Assert.Equal(
             "A dismissed report with an existing processing proposal cannot be restored.",
@@ -1734,6 +2309,7 @@ public sealed class BoyScoutDatabaseTests
               "verificationSummary": "Проблема все еще актуальна.",
               "title": "Исправить проблему",
               "description": "Устранить подтвержденную проблему.",
+              "currentConsequences": "Текущая логика повторно выполняет обработку и расходует ресурсы.",
               "acceptanceCriteria": "Проблема устранена и покрыта тестом.",
               "localizedReportTitle": "Проблема",
               "localizedReportObservation": "Наблюдаемое поведение.",
@@ -1760,6 +2336,7 @@ public sealed class BoyScoutDatabaseTests
               "verificationSummary": "Указанный код удален из текущего проекта.",
               "title": null,
               "description": null,
+              "currentConsequences": null,
               "acceptanceCriteria": null,
               "localizedReportTitle": "Устаревшая проблема",
               "localizedReportObservation": "В заметке описан удаленный код.",
@@ -1776,6 +2353,7 @@ public sealed class BoyScoutDatabaseTests
               "verificationSummary": "Исходный путь недоступен для проверки.",
               "title": null,
               "description": null,
+              "currentConsequences": null,
               "acceptanceCriteria": null,
               "localizedReportTitle": "Непроверенная проблема",
               "localizedReportObservation": "Наблюдение нельзя подтвердить.",
@@ -1807,6 +2385,7 @@ public sealed class BoyScoutDatabaseTests
                   "verificationSummary": "Доказательство.",
                   "title": null,
                   "description": null,
+                  "currentConsequences": null,
                   "acceptanceCriteria": null,
                   "localizedReportTitle": "Заголовок",
                   "localizedReportObservation": "Наблюдение",
@@ -1833,7 +2412,7 @@ public sealed class BoyScoutDatabaseTests
         store.FailProposal(processing.Id, "AI request failed");
         Assert.Equal(TaskProposalStates.Failed, Assert.Single(store.ListActiveProposals()).State);
 
-        store.RetryProposal(processing.Id);
+        store.RetryProposal(processing.Id, "Recheck evidence");
         Assert.Equal(TaskProposalStates.Queued, Assert.Single(store.ListActiveProposals()).State);
 
         store.TryClaimNextProposal();
@@ -1842,7 +2421,7 @@ public sealed class BoyScoutDatabaseTests
 
         store.ConfirmProposal(processing.Id);
         Assert.Empty(store.ListActiveProposals());
-        Assert.Throws<InvalidOperationException>(() => store.RetryProposal(processing.Id));
+        Assert.Throws<InvalidOperationException>(() => store.RetryProposal(processing.Id, "Recheck evidence"));
         Assert.Throws<InvalidOperationException>(() => store.ConfirmProposal(processing.Id));
     }
 
@@ -1863,7 +2442,7 @@ public sealed class BoyScoutDatabaseTests
         store.FailProposal(claimed.Id, "AI request failed");
         Assert.Null(store.GetProcessingProposal());
 
-        var retried = store.RetryProposal(claimed.Id);
+        var retried = store.RetryProposal(claimed.Id, "Recheck evidence");
         Assert.Null(store.GetProcessingProposal());
         Assert.Equal(retried.Id, store.TryClaimNextProposal()!.Id);
         Assert.Equal(retried.Id, store.GetProcessingProposal()!.Id);
@@ -2123,6 +2702,38 @@ public sealed class BoyScoutDatabaseTests
     }
 
     [Fact]
+    public void Reports_expose_stable_project_id_when_added_from_secondary_path()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var store = new ReportStore(database);
+        var primary = Path.Combine(fixture.DirectoryPath, "primary");
+        var alias = Path.Combine(fixture.DirectoryPath, "secondary");
+        store.Add(NewReport(primary, "First", "Observed"));
+        var projectId = Assert.Single(store.ListProjects()).Id;
+        using (var connection = database.OpenConnection())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                "INSERT INTO project_paths (project_id, path, is_primary, created_at) "
+                + "VALUES ($projectId, $path, 0, '2026-09-29T00:00:00.000Z');";
+            command.Parameters.AddWithValue("$projectId", projectId);
+            command.Parameters.AddWithValue("$path", alias);
+            command.ExecuteNonQuery();
+        }
+
+        var report = store.Add(NewReport(alias, "Second", "Still observed"));
+
+        Assert.Equal(alias, report.Project);
+        Assert.Equal(projectId, report.ProjectId);
+        Assert.Equal(projectId, store.Get(report.Id)!.ProjectId);
+        Assert.Equal(projectId, Assert.Single(store.BrowseNotes(projectId, null, null, "Second", null, 40).Items).ProjectId);
+        Assert.Equal(projectId, Assert.Single(store.List(alias, null, 1)).ProjectId);
+        Assert.Single(store.ListProjects());
+    }
+
+    [Fact]
     public void Migrate_rejects_incompatible_legacy_schema_without_marking_it_migrated()
     {
         using var fixture = new DatabaseFixture();
@@ -2262,8 +2873,53 @@ public sealed class BoyScoutDatabaseTests
                 """);
         }
 
+        public void DowngradeToVersionNine()
+        {
+            DowngradeToVersionTen();
+            using var connection = OpenConnection();
+            if (Scalar<long>(connection, "PRAGMA user_version;") != 10) return;
+            Execute(connection,
+                """
+                ALTER TABLE reports DROP COLUMN source_name;
+                ALTER TABLE reports DROP COLUMN source_installation_id;
+                ALTER TABLE tasks DROP COLUMN confirmer_name;
+                ALTER TABLE tasks DROP COLUMN confirmer_installation_id;
+                DELETE FROM schema_migrations WHERE version = 10;
+                PRAGMA user_version = 9;
+                """);
+        }
+
+        public void DowngradeToVersionTen()
+        {
+            DowngradeToVersionEleven();
+            using var connection = OpenConnection();
+            if (Scalar<long>(connection, "PRAGMA user_version;") != 11) return;
+            Execute(connection,
+                """
+                ALTER TABLE task_proposals DROP COLUMN agent_checked_at;
+                ALTER TABLE task_proposals DROP COLUMN human_approved_at;
+                ALTER TABLE task_proposals DROP COLUMN human_rejected_at;
+                DELETE FROM schema_migrations WHERE version = 11;
+                PRAGMA user_version = 10;
+                """);
+        }
+
+        public void DowngradeToVersionEleven()
+        {
+            using var connection = OpenConnection();
+            if (Scalar<long>(connection, "PRAGMA user_version;") != 12) return;
+            Execute(connection,
+                """
+                ALTER TABLE task_proposals DROP COLUMN current_consequences;
+                ALTER TABLE tasks DROP COLUMN current_consequences;
+                DELETE FROM schema_migrations WHERE version = 12;
+                PRAGMA user_version = 11;
+                """);
+        }
+
         public void DowngradeToVersionTwo()
         {
+            DowngradeToVersionNine();
             using var connection = OpenConnection();
             Execute(
                 connection,
@@ -2280,6 +2936,7 @@ public sealed class BoyScoutDatabaseTests
 
         public void DowngradeToVersionThree()
         {
+            DowngradeToVersionNine();
             using var connection = OpenConnection();
             Execute(
                 connection,
@@ -2334,6 +2991,7 @@ public sealed class BoyScoutDatabaseTests
 
         public void DowngradeToVersionFive()
         {
+            DowngradeToVersionNine();
             using var connection = OpenConnection();
             Execute(
                 connection,
@@ -2377,6 +3035,7 @@ public sealed class BoyScoutDatabaseTests
 
         public void DowngradeToVersionSix()
         {
+            DowngradeToVersionNine();
             using var connection = OpenConnection();
             Execute(
                 connection,
@@ -2432,6 +3091,7 @@ public sealed class BoyScoutDatabaseTests
 
         public void DowngradeToVersionSeven()
         {
+            DowngradeToVersionNine();
             using var connection = OpenConnection();
             Execute(
                 connection,
@@ -2487,6 +3147,7 @@ public sealed class BoyScoutDatabaseTests
 
         public void DowngradeToVersionEight()
         {
+            DowngradeToVersionNine();
             using var connection = OpenConnection();
             Execute(
                 connection,

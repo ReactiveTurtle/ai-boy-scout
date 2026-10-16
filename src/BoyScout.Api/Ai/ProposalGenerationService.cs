@@ -3,7 +3,7 @@ using BoyScout.Core.Tasks;
 namespace BoyScout.Api.Ai;
 
 internal sealed class ProposalGenerationService(
-    TaskStore taskStore,
+    ITaskStore taskStore,
     OpenCodeProposalGenerator generator,
     AiProcessingControl processingControl,
     ILogger<ProposalGenerationService> logger) : BackgroundService
@@ -81,7 +81,7 @@ internal sealed class ProposalGenerationService(
     }
 
     internal static TaskProposal CompleteProposal(
-        TaskStore taskStore,
+        ITaskStore taskStore,
         TaskProposal proposal,
         GeneratedProposal generated)
     {
@@ -96,7 +96,8 @@ internal sealed class ProposalGenerationService(
                 generated.LocalizedReportTitle,
                 generated.LocalizedReportObservation,
                 generated.LocalizedReportImpact,
-                generated.LocalizedReportSuggestedAction),
+                generated.LocalizedReportSuggestedAction,
+                currentConsequences: generated.CurrentConsequences),
             TaskProposalRelevances.Obsolete =>
                 taskStore.SaveRejectionRecommendation(
                     proposal.Id,

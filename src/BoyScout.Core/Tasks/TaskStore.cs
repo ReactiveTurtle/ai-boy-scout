@@ -1,11 +1,14 @@
 using System.Globalization;
 using BoyScout.Core.Reports;
 using BoyScout.Core.Storage;
+using BoyScout.Core.Storage.Config;
 using Microsoft.Data.Sqlite;
 
 namespace BoyScout.Core.Tasks;
 
-public sealed class TaskStore(BoyScoutDatabase database)
+public sealed record TaskPage(IReadOnlyList<BoyScoutTask> Items, long Total, long? NextBefore);
+
+public sealed class TaskStore(BoyScoutDatabase database, BoyScoutConfigService? config = null) : ITaskStore
 {
     public const int MaximumRejectionReasonLength = 2_000;
     public const int MaximumClarificationLength = 2_000;
@@ -42,7 +45,7 @@ public sealed class TaskStore(BoyScoutDatabase database)
             queuedCommand.CommandText =
                 """
                 UPDATE task_proposals
-                SET state = 'processing', updated_at = $updatedAt
+                SET state = 'processing', current_consequences = NULL, updated_at = $updatedAt
                 WHERE id = (
                   SELECT task_proposals.id
                   FROM task_proposals
@@ -118,7 +121,8 @@ public sealed class TaskStore(BoyScoutDatabase database)
         string? localizedReportTitle = null,
         string? localizedReportObservation = null,
         string? localizedReportImpact = null,
-        string? localizedReportSuggestedAction = null)
+        string? localizedReportSuggestedAction = null,
+        string? currentConsequences = null)
     {
         ValidatePositive(id, nameof(id));
         ValidateRequired(title, nameof(title));
@@ -127,6 +131,10 @@ public sealed class TaskStore(BoyScoutDatabase database)
         if (verificationSummary is not null)
         {
             ValidateRequired(verificationSummary, nameof(verificationSummary));
+        }
+        if (currentConsequences is not null)
+        {
+            ValidateRequired(currentConsequences, nameof(currentConsequences));
         }
 
         using var connection = database.OpenConnection();
@@ -137,17 +145,18 @@ public sealed class TaskStore(BoyScoutDatabase database)
             SET state = 'ready', relevance = 'current', recommended_action = 'create_task',
                 final_rejection_reason = NULL, verification_summary = $verificationSummary,
                 title = $title, description = $description,
-                acceptance_criteria = $acceptanceCriteria,
+                acceptance_criteria = $acceptanceCriteria, current_consequences = $currentConsequences,
                 localized_report_title = $localizedReportTitle,
                 localized_report_observation = $localizedReportObservation,
                 localized_report_impact = $localizedReportImpact,
                 localized_report_suggested_action = $localizedReportSuggestedAction,
-                error = NULL, updated_at = $updatedAt
+                error = NULL, agent_checked_at = $updatedAt, updated_at = $updatedAt
             WHERE id = $id AND state = 'processing';
             """;
         command.Parameters.AddWithValue("$title", title);
         command.Parameters.AddWithValue("$description", description);
         command.Parameters.AddWithValue("$acceptanceCriteria", acceptanceCriteria);
+        command.Parameters.AddWithValue("$currentConsequences", DbValue(currentConsequences));
         command.Parameters.AddWithValue("$verificationSummary", DbValue(verificationSummary));
         command.Parameters.AddWithValue("$localizedReportTitle", DbValue(localizedReportTitle));
         command.Parameters.AddWithValue("$localizedReportObservation", DbValue(localizedReportObservation));
@@ -170,7 +179,8 @@ public sealed class TaskStore(BoyScoutDatabase database)
         command.CommandText =
             """
             UPDATE task_proposals
-            SET state = 'failed', error = $error, updated_at = $updatedAt
+            SET state = 'failed', current_consequences = NULL,
+                error = $error, updated_at = $updatedAt
             WHERE id = $id AND state = 'processing';
             """;
         command.Parameters.AddWithValue("$error", error);
@@ -206,12 +216,13 @@ public sealed class TaskStore(BoyScoutDatabase database)
             UPDATE task_proposals
             SET state = 'unverified', relevance = $relevance, recommended_action = NULL,
                 final_rejection_reason = NULL, verification_summary = $summary,
-                title = NULL, description = NULL, acceptance_criteria = NULL,
+                 title = NULL, description = NULL, acceptance_criteria = NULL,
+                 current_consequences = NULL,
                 localized_report_title = $localizedReportTitle,
                 localized_report_observation = $localizedReportObservation,
                 localized_report_impact = $localizedReportImpact,
                 localized_report_suggested_action = $localizedReportSuggestedAction,
-                error = NULL, updated_at = $updatedAt
+                 error = NULL, agent_checked_at = $updatedAt, updated_at = $updatedAt
             WHERE id = $id AND state = 'processing';
             """;
         command.Parameters.AddWithValue("$summary", summary);
@@ -247,12 +258,13 @@ public sealed class TaskStore(BoyScoutDatabase database)
             SET state = 'ready', relevance = 'obsolete', recommended_action = 'reject',
                 final_rejection_reason = $finalRejectionReason,
                 verification_summary = $verificationSummary,
-                title = NULL, description = NULL, acceptance_criteria = NULL,
+                 title = NULL, description = NULL, acceptance_criteria = NULL,
+                 current_consequences = NULL,
                 localized_report_title = $localizedReportTitle,
                 localized_report_observation = $localizedReportObservation,
                 localized_report_impact = $localizedReportImpact,
                 localized_report_suggested_action = $localizedReportSuggestedAction,
-                error = NULL, updated_at = $updatedAt
+                 error = NULL, agent_checked_at = $updatedAt, updated_at = $updatedAt
             WHERE id = $id AND state = 'processing';
             """;
         command.Parameters.AddWithValue("$finalRejectionReason", finalRejectionReason);
@@ -268,9 +280,10 @@ public sealed class TaskStore(BoyScoutDatabase database)
             ?? throw new InvalidOperationException("The rejection recommendation could not be read back.");
     }
 
-    public TaskProposal RetryProposal(long id)
+    public TaskProposal RetryProposal(long id, string comment)
     {
         ValidatePositive(id, nameof(id));
+        var normalizedComment = RequireComment(comment);
 
         using var connection = database.OpenConnection();
         using var command = connection.CreateCommand();
@@ -278,31 +291,40 @@ public sealed class TaskStore(BoyScoutDatabase database)
             """
             UPDATE task_proposals
             SET state = 'queued', title = NULL, description = NULL,
-                acceptance_criteria = NULL, relevance = NULL, verification_summary = NULL,
+                 acceptance_criteria = NULL, current_consequences = NULL,
+                 relevance = NULL, verification_summary = NULL,
                 recommended_action = NULL, final_rejection_reason = NULL,
-                error = NULL,
-                attempts = attempts + 1, updated_at = $updatedAt
+                 error = NULL, agent_checked_at = NULL,
+                 human_approved_at = NULL, human_rejected_at = NULL,
+                 requested_clarification = $comment,
+                 attempts = attempts + 1, updated_at = $updatedAt
             WHERE id = $id AND state IN ('failed', 'ready', 'unverified');
             """;
         command.Parameters.AddWithValue("$updatedAt", UtcTimestamp());
+        command.Parameters.AddWithValue("$comment", normalizedComment);
         command.Parameters.AddWithValue("$id", id);
         EnsureSingleTransition(command, "Only a failed, ready, or unverified proposal can be retried.");
         return GetProposal(connection, transaction: null, id)
             ?? throw new InvalidOperationException("The retried task proposal could not be read back.");
     }
 
-    public TaskProposal RequeueProcessingProposal(long id)
+    public TaskProposal RequeueProcessingProposal(long id, string comment)
     {
         ValidatePositive(id, nameof(id));
+        var normalizedComment = RequireComment(comment);
         using var connection = database.OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText =
             """
             UPDATE task_proposals
-            SET state = 'queued', updated_at = $updatedAt
+            SET state = 'queued', current_consequences = NULL, agent_checked_at = NULL,
+                 review_intent = 'proposal', requested_rejection_reason = NULL,
+                 requested_clarification = $comment,
+                human_approved_at = NULL, human_rejected_at = NULL, updated_at = $updatedAt
             WHERE id = $id AND state = 'processing';
             """;
         command.Parameters.AddWithValue("$updatedAt", UtcTimestamp());
+        command.Parameters.AddWithValue("$comment", DbValue(normalizedComment));
         command.Parameters.AddWithValue("$id", id);
         EnsureSingleTransition(command, "Only a processing proposal can be requeued.");
         return GetProposal(connection, transaction: null, id)
@@ -413,8 +435,11 @@ public sealed class TaskStore(BoyScoutDatabase database)
                         requested_rejection_reason = $reason, requested_clarification = NULL,
                         relevance = NULL, verification_summary = NULL,
                         recommended_action = NULL, final_rejection_reason = NULL,
-                        title = NULL, description = NULL, acceptance_criteria = NULL,
-                        error = NULL, attempts = attempts + 1, updated_at = $updatedAt
+                         title = NULL, description = NULL, acceptance_criteria = NULL,
+                         current_consequences = NULL,
+                         error = NULL, agent_checked_at = NULL,
+                         human_approved_at = NULL, human_rejected_at = NULL,
+                         attempts = attempts + 1, updated_at = $updatedAt
                     WHERE id = $id AND state IN ('ready', 'unverified', 'failed');
                     """;
                 writeCommand.Parameters.AddWithValue("$id", proposalId.Value);
@@ -452,8 +477,11 @@ public sealed class TaskStore(BoyScoutDatabase database)
                 requested_rejection_reason = NULL, requested_clarification = $instruction,
                 relevance = NULL, verification_summary = NULL,
                 recommended_action = NULL, final_rejection_reason = NULL,
-                title = NULL, description = NULL, acceptance_criteria = NULL,
-                error = NULL, attempts = attempts + 1, updated_at = $updatedAt
+                 title = NULL, description = NULL, acceptance_criteria = NULL,
+                 current_consequences = NULL,
+                 error = NULL, agent_checked_at = NULL,
+                 human_approved_at = NULL, human_rejected_at = NULL,
+                 attempts = attempts + 1, updated_at = $updatedAt
             WHERE report_sequence = $reportSequence
               AND state IN ('ready', 'unverified', 'failed')
               AND EXISTS (
@@ -577,6 +605,7 @@ public sealed class TaskStore(BoyScoutDatabase database)
             throw new InvalidOperationException("Only a ready create-task recommendation can be confirmed.");
         }
 
+        var confirmer = config?.LoadStatus();
         long taskSequence;
         using (var insertCommand = connection.CreateCommand())
         {
@@ -584,9 +613,13 @@ public sealed class TaskStore(BoyScoutDatabase database)
             insertCommand.CommandText =
                 """
                 INSERT INTO tasks (
-                  project_id, title, description, acceptance_criteria, status, created_at, updated_at
+                   project_id, title, description, acceptance_criteria, current_consequences,
+                   status, created_at, updated_at,
+                  confirmer_name, confirmer_installation_id
                 ) VALUES (
-                  $projectId, $title, $description, $acceptanceCriteria, 'todo', $createdAt, $updatedAt
+                   $projectId, $title, $description, $acceptanceCriteria, $currentConsequences,
+                   'todo', $createdAt, $updatedAt,
+                  $confirmerName, $confirmerInstallationId
                 )
                 RETURNING sequence;
                 """;
@@ -594,8 +627,11 @@ public sealed class TaskStore(BoyScoutDatabase database)
             insertCommand.Parameters.AddWithValue("$title", proposal.Title!);
             insertCommand.Parameters.AddWithValue("$description", proposal.Description!);
             insertCommand.Parameters.AddWithValue("$acceptanceCriteria", proposal.AcceptanceCriteria!);
+            insertCommand.Parameters.AddWithValue("$currentConsequences", DbValue(proposal.CurrentConsequences));
             insertCommand.Parameters.AddWithValue("$createdAt", timestamp);
             insertCommand.Parameters.AddWithValue("$updatedAt", timestamp);
+            insertCommand.Parameters.AddWithValue("$confirmerName", DbValue(confirmer?.DisplayName));
+            insertCommand.Parameters.AddWithValue("$confirmerInstallationId", DbValue(confirmer?.InstallationId.ToString("D")));
             taskSequence = Convert.ToInt64(insertCommand.ExecuteScalar(), CultureInfo.InvariantCulture);
         }
 
@@ -618,7 +654,8 @@ public sealed class TaskStore(BoyScoutDatabase database)
             updateCommand.CommandText =
                 """
                 UPDATE task_proposals
-                SET state = 'confirmed', updated_at = $updatedAt
+                 SET state = 'confirmed', human_approved_at = $updatedAt,
+                     human_rejected_at = NULL, updated_at = $updatedAt
                 WHERE id = $id AND state = 'ready' AND relevance = 'current';
 
                 UPDATE reports
@@ -658,7 +695,9 @@ public sealed class TaskStore(BoyScoutDatabase database)
             proposalCommand.CommandText =
                 """
                 UPDATE task_proposals
-                SET state = 'rejected', updated_at = $updatedAt
+                 SET state = 'rejected', current_consequences = NULL,
+                     human_rejected_at = $updatedAt,
+                     human_approved_at = NULL, updated_at = $updatedAt
                 WHERE id = $id AND state = 'ready' AND relevance = 'obsolete'
                   AND recommended_action = 'reject';
                 """;
@@ -728,12 +767,96 @@ public sealed class TaskStore(BoyScoutDatabase database)
                        WHERE task_sequence = tasks.sequence
                        ORDER BY report_sequence
                      ) AS source
-                   ), '')
+                    ), ''), tasks.confirmer_name, tasks.confirmer_installation_id,
+                    tasks.current_consequences
             FROM tasks
             {whereClause}
             ORDER BY sequence DESC;
             """;
         return ReadTasks(command);
+    }
+
+    public TaskPage BrowseTasks(long? projectId, string? status, string? query, long? before, int limit)
+    {
+        if (limit is < 1 or > 100)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit), "Limit must be between 1 and 100.");
+        }
+
+        if (projectId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(projectId), "Project ID must be positive.");
+        }
+
+        if (before <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(before), "Cursor must be positive.");
+        }
+
+        if (status is not null && !TaskStatuses.IsValid(status))
+        {
+            throw new ArgumentException($"Unsupported task status: {status}.", nameof(status));
+        }
+
+        using var connection = database.OpenConnection();
+        var search = string.IsNullOrWhiteSpace(query) ? null : query.Trim().ToLower(new CultureInfo("ru-RU"));
+        if (search is not null)
+        {
+            connection.CreateFunction<string, string, bool>(
+                "task_contains", (value, term) => value.ToLower(new CultureInfo("ru-RU")).Contains(term, StringComparison.Ordinal));
+        }
+
+        var conditions = new List<string>();
+        if (projectId is not null) conditions.Add("tasks.project_id = $projectId");
+        if (status is not null) conditions.Add("tasks.status = $status");
+        if (search is not null)
+        {
+            conditions.Add("(task_contains(tasks.title, $search) OR task_contains(tasks.description, $search)"
+                + " OR task_contains(tasks.acceptance_criteria, $search)"
+                + " OR task_contains(COALESCE(tasks.current_consequences, ''), $search))");
+        }
+
+        var where = conditions.Count == 0 ? string.Empty : $"WHERE {string.Join(" AND ", conditions)}";
+        using var countCommand = connection.CreateCommand();
+        using var pageCommand = connection.CreateCommand();
+        foreach (var command in new[] { countCommand, pageCommand })
+        {
+            if (projectId is not null) command.Parameters.AddWithValue("$projectId", projectId.Value);
+            if (status is not null) command.Parameters.AddWithValue("$status", status);
+            if (search is not null) command.Parameters.AddWithValue("$search", search);
+        }
+
+        countCommand.CommandText = $"SELECT COUNT(*) FROM tasks {where};";
+        var total = Convert.ToInt64(countCommand.ExecuteScalar(), CultureInfo.InvariantCulture);
+        if (before is not null)
+        {
+            conditions.Add("tasks.sequence < $before");
+            pageCommand.Parameters.AddWithValue("$before", before.Value);
+            where = $"WHERE {string.Join(" AND ", conditions)}";
+        }
+
+        pageCommand.CommandText =
+            $"""
+             SELECT tasks.sequence, tasks.project_id, tasks.title, tasks.description,
+                    tasks.acceptance_criteria, tasks.status, tasks.created_at, tasks.updated_at,
+                    COALESCE((
+                      SELECT group_concat(source.report_sequence, ',')
+                      FROM (
+                        SELECT report_sequence FROM report_tasks
+                        WHERE task_sequence = tasks.sequence ORDER BY report_sequence
+                      ) AS source
+                     ), ''), tasks.confirmer_name, tasks.confirmer_installation_id,
+                     tasks.current_consequences
+              FROM tasks
+             {where}
+             ORDER BY tasks.sequence DESC
+             LIMIT $pageSize;
+             """;
+        pageCommand.Parameters.AddWithValue("$pageSize", limit + 1);
+        var tasks = ReadTasks(pageCommand);
+        var items = tasks.Take(limit).ToArray();
+        var nextBefore = tasks.Count > limit ? long.Parse(items[^1].Id.AsSpan(4), CultureInfo.InvariantCulture) : (long?)null;
+        return new TaskPage(items, total, nextBefore);
     }
 
     public NoteWorkflowInfo? GetNoteWorkflow(string reportId)
@@ -790,7 +913,9 @@ public sealed class TaskStore(BoyScoutDatabase database)
                   THEN task_proposals.verification_summary
                 ELSE NULL
               END,
-              COALESCE(task_proposals.updated_at, reports.updated_at)
+               COALESCE(task_proposals.updated_at, reports.updated_at),
+               task_proposals.agent_checked_at, task_proposals.human_approved_at,
+               task_proposals.human_rejected_at
             FROM reports
             LEFT JOIN task_proposals ON task_proposals.report_sequence = reports.sequence
             WHERE reports.sequence IN ({string.Join(", ", sequences.Select((_, index) => $"$id{index}"))});
@@ -826,9 +951,10 @@ public sealed class TaskStore(BoyScoutDatabase database)
         return GetProposalByReportSequence(connection, transaction: null, reportSequence);
     }
 
-    public RestoredNote RestoreRejectedNote(string reportId)
+    public RestoredNote RestoreRejectedNote(string reportId, string comment)
     {
         var reportSequence = ParseReportId(reportId);
+        var normalizedComment = RequireComment(comment);
         var timestamp = UtcTimestamp();
         using var connection = database.OpenConnection();
         using var transaction = connection.BeginTransaction(deferred: false);
@@ -892,13 +1018,14 @@ public sealed class TaskStore(BoyScoutDatabase database)
                   requested_rejection_reason, requested_clarification,
                   attempts, created_at, updated_at
                 ) VALUES (
-                  $reportSequence, $projectId, 'queued', 'proposal', NULL, NULL,
+                  $reportSequence, $projectId, 'queued', 'proposal', NULL, $comment,
                   0, $createdAt, $updatedAt
                 )
                 RETURNING id;
                 """;
             proposalCommand.Parameters.AddWithValue("$reportSequence", reportSequence);
             proposalCommand.Parameters.AddWithValue("$projectId", projectId);
+            proposalCommand.Parameters.AddWithValue("$comment", DbValue(normalizedComment));
             proposalCommand.Parameters.AddWithValue("$createdAt", timestamp);
             proposalCommand.Parameters.AddWithValue("$updatedAt", timestamp);
             proposalId = Convert.ToInt64(proposalCommand.ExecuteScalar(), CultureInfo.InvariantCulture);
@@ -911,13 +1038,16 @@ public sealed class TaskStore(BoyScoutDatabase database)
                 """
                 UPDATE task_proposals
                 SET state = 'queued', review_intent = 'proposal',
-                    requested_rejection_reason = NULL, requested_clarification = NULL,
+                     requested_rejection_reason = NULL, requested_clarification = $comment,
                     relevance = NULL, recommended_action = NULL, final_rejection_reason = NULL,
                     verification_summary = NULL, title = NULL, description = NULL,
-                    acceptance_criteria = NULL, error = NULL, updated_at = $updatedAt
+                     acceptance_criteria = NULL, current_consequences = NULL, error = NULL,
+                     agent_checked_at = NULL, human_approved_at = NULL,
+                     human_rejected_at = NULL, updated_at = $updatedAt
                 WHERE id = $id AND state = 'rejected';
                 """;
             proposalCommand.Parameters.AddWithValue("$updatedAt", timestamp);
+            proposalCommand.Parameters.AddWithValue("$comment", DbValue(normalizedComment));
             proposalCommand.Parameters.AddWithValue("$id", proposalId.Value);
             EnsureSingleTransition(proposalCommand, "The rejected proposal could not be restored.");
         }
@@ -930,9 +1060,10 @@ public sealed class TaskStore(BoyScoutDatabase database)
         return new RestoredNote(workflow, proposal);
     }
 
-    public ReprocessedNote ReprocessCompletedNote(string reportId)
+    public ReprocessedNote ReprocessCompletedNote(string reportId, string comment)
     {
         var reportSequence = ParseReportId(reportId);
+        var normalizedComment = RequireComment(comment);
         var timestamp = UtcTimestamp();
         using var connection = database.OpenConnection();
         using var transaction = connection.BeginTransaction(deferred: false);
@@ -1050,13 +1181,14 @@ public sealed class TaskStore(BoyScoutDatabase database)
                   requested_rejection_reason, requested_clarification,
                   attempts, created_at, updated_at
                 ) VALUES (
-                  $reportSequence, $projectId, 'queued', 'proposal', NULL, NULL,
+                  $reportSequence, $projectId, 'queued', 'proposal', NULL, $comment,
                   0, $createdAt, $updatedAt
                 )
                 RETURNING id;
                 """;
             proposalCommand.Parameters.AddWithValue("$reportSequence", reportSequence);
             proposalCommand.Parameters.AddWithValue("$projectId", projectId);
+            proposalCommand.Parameters.AddWithValue("$comment", DbValue(normalizedComment));
             proposalCommand.Parameters.AddWithValue("$createdAt", timestamp);
             proposalCommand.Parameters.AddWithValue("$updatedAt", timestamp);
             proposalId = Convert.ToInt64(proposalCommand.ExecuteScalar(), CultureInfo.InvariantCulture);
@@ -1069,15 +1201,19 @@ public sealed class TaskStore(BoyScoutDatabase database)
                 """
                 UPDATE task_proposals
                 SET state = 'queued', review_intent = 'proposal',
-                    requested_rejection_reason = NULL, requested_clarification = NULL,
+                     requested_rejection_reason = NULL, requested_clarification = $comment,
                     relevance = NULL, recommended_action = NULL, final_rejection_reason = NULL,
                     verification_summary = NULL, title = NULL, description = NULL,
-                    acceptance_criteria = NULL, localized_report_title = NULL,
+                     acceptance_criteria = NULL, current_consequences = NULL,
+                     localized_report_title = NULL,
                     localized_report_observation = NULL, localized_report_impact = NULL,
-                    localized_report_suggested_action = NULL, error = NULL, updated_at = $updatedAt
+                     localized_report_suggested_action = NULL, error = NULL,
+                     agent_checked_at = NULL, human_approved_at = NULL,
+                     human_rejected_at = NULL, updated_at = $updatedAt
                 WHERE id = $id AND state = 'confirmed';
                 """;
             proposalCommand.Parameters.AddWithValue("$updatedAt", timestamp);
+            proposalCommand.Parameters.AddWithValue("$comment", DbValue(normalizedComment));
             proposalCommand.Parameters.AddWithValue("$id", proposalId.Value);
             EnsureSingleTransition(proposalCommand, "The confirmed proposal could not be queued for reprocessing.");
         }
@@ -1147,7 +1283,9 @@ public sealed class TaskStore(BoyScoutDatabase database)
                   THEN task_proposals.verification_summary
                 ELSE NULL
               END,
-              COALESCE(task_proposals.updated_at, reports.updated_at)
+               COALESCE(task_proposals.updated_at, reports.updated_at),
+               task_proposals.agent_checked_at, task_proposals.human_approved_at,
+               task_proposals.human_rejected_at
             FROM reports
             LEFT JOIN task_proposals ON task_proposals.report_sequence = reports.sequence
             WHERE reports.sequence = $reportSequence;
@@ -1192,7 +1330,10 @@ public sealed class TaskStore(BoyScoutDatabase database)
             NullableString(reader, 6),
             NullableString(reader, 7),
             NullableString(reader, 8),
-            reader.GetString(9));
+             reader.GetString(9),
+             NullableString(reader, 10),
+             NullableString(reader, 11),
+             NullableString(reader, 12));
     }
 
     private static TaskProposal? GetProposal(
@@ -1239,7 +1380,9 @@ public sealed class TaskStore(BoyScoutDatabase database)
               task_proposals.localized_report_title,
               task_proposals.localized_report_observation,
               task_proposals.localized_report_impact,
-              task_proposals.localized_report_suggested_action
+               task_proposals.localized_report_suggested_action,
+               task_proposals.agent_checked_at, task_proposals.human_approved_at,
+               task_proposals.human_rejected_at, task_proposals.current_consequences
             FROM task_proposals
             JOIN reports ON reports.sequence = task_proposals.report_sequence
             """;
@@ -1282,7 +1425,11 @@ public sealed class TaskStore(BoyScoutDatabase database)
                     NullableString(reader, 25),
                     NullableString(reader, 26),
                     NullableString(reader, 27),
-                    NullableString(reader, 28)));
+                     NullableString(reader, 28),
+                     NullableString(reader, 29),
+                     NullableString(reader, 30),
+                      NullableString(reader, 31),
+                      NullableString(reader, 32)));
         }
 
         return proposals;
@@ -1307,7 +1454,8 @@ public sealed class TaskStore(BoyScoutDatabase database)
                        WHERE task_sequence = tasks.sequence
                        ORDER BY report_sequence
                      ) AS source
-                   ), '')
+                     ), ''), tasks.confirmer_name, tasks.confirmer_installation_id,
+                     tasks.current_consequences
             FROM tasks
             WHERE tasks.sequence = $sequence;
             """;
@@ -1331,7 +1479,10 @@ public sealed class TaskStore(BoyScoutDatabase database)
                     reader.GetString(5),
                     reader.GetString(6),
                     reader.GetString(7),
-                    ParseReportIds(reader.GetString(8))));
+                     ParseReportIds(reader.GetString(8)),
+                     NullableString(reader, 9),
+                      reader.IsDBNull(10) ? null : Guid.Parse(reader.GetString(10)),
+                      NullableString(reader, 11)));
         }
 
         return tasks;
@@ -1349,6 +1500,22 @@ public sealed class TaskStore(BoyScoutDatabase database)
         reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
 
     private static object DbValue(string? value) => value is null ? DBNull.Value : value;
+
+    private static string RequireComment(string? comment)
+    {
+        var normalized = comment?.Trim();
+        if (string.IsNullOrEmpty(normalized))
+        {
+            throw new ArgumentException("Comment is required.", nameof(comment));
+        }
+        if (normalized.Length > MaximumClarificationLength)
+        {
+            throw new ArgumentException(
+                $"Comment must not exceed {MaximumClarificationLength} characters.", nameof(comment));
+        }
+
+        return normalized;
+    }
 
     private static string FormatReportId(long sequence) => $"BSR-{sequence:D6}";
 

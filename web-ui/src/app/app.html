@@ -1,10 +1,12 @@
 <div class="page">
-  <div class="app-window" [class.focus-mode]="focusMode()" [class.nav-collapsed]="sidebarCollapsed()">
+  <div class="app-window" [class.focus-mode]="focusMode()" [class.nav-collapsed]="sidebarCollapsed()" [class.settings-mode]="workspace() === 'storage'">
     <header class="app-header">
-      <button class="menu-button" type="button" aria-label="Скрыть или показать проекты" (click)="sidebarCollapsed.set(!sidebarCollapsed())">☰</button>
+      @if (workspace() !== 'storage') { <button class="menu-button" type="button" aria-label="Скрыть или показать проекты" (click)="sidebarCollapsed.set(!sidebarCollapsed())">☰</button> }
       <a class="brand" href="/" aria-label="Boy Scout">boy.<strong>scout</strong></a>
       <div class="header-spacer"></div>
-      <div class="sync-state"><i></i><span>Локальная база</span></div>
+      <div class="sync-state"><i></i><span>{{ storageStatus()?.backend === 1 ? 'Firebase' : 'Локальная база' }}</span></div>
+      <a class="header-settings" href="/settings/storage" aria-label="Настройки BoyScout" [attr.aria-current]="workspace() === 'storage' ? 'page' : null"><span>Настройки BoyScout</span></a>
+      @if (workspace() !== 'storage') {
       <button
         class="automation-toggle"
         [class.running]="automation()?.enabled"
@@ -15,21 +17,30 @@
         <i></i><span>{{ automation()?.enabled ? 'Остановить обработку' : 'Запустить обработку' }}</span>
       </button>
       <div class="ai-avatar" [attr.data-state]="proposal()?.state ?? 'idle'">AI</div>
+      }
     </header>
 
     <div class="app-layout">
+      @if (workspace() !== 'storage') {
       <aside class="sidebar">
         <nav class="main-nav" aria-label="Основная навигация">
           <button type="button" [class.active]="workspace() === 'notes'" (click)="switchWorkspace('notes')">
             <span class="nav-icon">◇</span><span>Заметки</span><b>{{ allNoteCount() }}</b>
           </button>
           <button type="button" [class.active]="workspace() === 'tasks'" (click)="switchWorkspace('tasks')">
-            <span class="nav-icon">✓</span><span>Задачи</span><b>{{ tasks().length }}</b>
+            <span class="nav-icon">✓</span><span>Задачи</span><b>{{ taskTotal() }}</b>
           </button>
         </nav>
 
         <div class="sidebar-section">
-          <div class="sidebar-title"><span>Проекты</span><b>{{ projects().length }}</b></div>
+          <div class="sidebar-title"><span>Проекты</span><b>{{ projects().length }}</b><button type="button" aria-label="Добавить проект" (click)="projectFormOpen.set(!projectFormOpen())">+</button></div>
+          @if (projectFormOpen()) {
+            <form class="project-form" (submit)="$event.preventDefault(); createProject()">
+              <label>Название <input type="text" required [value]="newProjectName()" (input)="newProjectName.set($any($event.target).value)" /></label>
+              <label>Путь на этом компьютере <input type="text" required [value]="newProjectPath()" (input)="newProjectPath.set($any($event.target).value)" /></label>
+              <button type="submit" [disabled]="actionPending() || !newProjectName().trim() || !newProjectPath().trim()">Создать локальный проект</button>
+            </form>
+          }
           <label class="project-search"><span>⌕</span><input type="search" placeholder="Найти проект" [value]="projectSearchText()" (input)="updateProjectSearch($event)" /></label>
           <div class="project-list">
             <button class="project-link" [class.active]="selectedProjectId() === null" type="button" (click)="selectProject(null)">
@@ -53,29 +64,79 @@
           </div>
         </div>
 
-        <div class="sidebar-ai" [attr.data-state]="proposal()?.state ?? 'idle'">
+        <div class="sidebar-ai" [attr.data-state]="selectedProject() && !selectedProject()!.aiAccessGranted ? 'idle' : proposal()?.state ?? 'idle'">
           <div><i></i><span>OpenCode</span></div>
-          @if (proposal(); as draft) {
+          @if (selectedProject() && !selectedProject()!.aiAccessGranted) {
+            <p>Чтение кода выбранного проекта не разрешено. Новые проверки не начнутся.</p>
+          } @else if (proposal(); as draft) {
             @if (draft.state === 'queued') { <p>Ожидает обработки: {{ draft.reportId }}</p> }
             @else if (draft.state === 'processing') { <p>Разбирает {{ draft.reportId }}</p> }
-            @else if (draft.state === 'ready') { <p>Актуальность подтверждена</p> }
+            @else if (draft.state === 'ready') { <p>Заметка {{ draft.reportId }} проверена. Ожидает вашего решения</p> }
             @else if (draft.state === 'unverified') { <p>Не удалось проверить</p> }
             @else { <p>Нужен повтор обработки</p> }
           } @else { <p>{{ automation()?.enabled ? 'Очередь свободна' : 'Обработка остановлена' }}</p> }
         </div>
       </aside>
+      }
 
       <main class="content">
+        @if (workspace() === 'storage') {
+          <div class="storage-page">
+            <nav class="storage-breadcrumb" aria-label="Навигация"><a href="/">Рабочий стол</a><span>/</span><span>Настройки</span></nav>
+            <header class="storage-hero"><span>BOY SCOUT / CONFIGURATION</span><h1>Хранилище и имя</h1><p>Настройки этой установки. Проекты, AI-доступ и выбор хранилища новых записей управляются отдельно в настройках каждого проекта.</p></header>
+            <div class="storage-layout">
+              <div class="storage-main">
+                <section class="storage-card">
+                  <span class="storage-step">01 / Идентификатор установки</span>
+                  <h2>Имя BoyScout</h2>
+                  <p>Это имя будет указано у новых заметок и задач, подтверждённых на этом компьютере.</p>
+                  <form (submit)="$event.preventDefault(); saveDisplayName()">
+                    <label>Отображаемое имя <input maxlength="100" required type="text" [value]="displayName()" (input)="displayName.set($any($event.target).value)" /></label>
+                    <button type="submit" [disabled]="storagePending() || !displayName().trim()">Сохранить имя</button>
+                  </form>
+                </section>
+                <section class="storage-card">
+                  <span class="storage-step">02 / Общая база</span>
+                  <h2>Firebase Realtime Database</h2>
+                  <p>{{ storageStatus()?.hasFirebaseConnection ? 'Учётные данные сохранены на этом компьютере.' : 'Учётные данные ещё не указаны.' }} Поля ниже сохраняют подключение, но не переводят заметки и задачи в Firebase.</p>
+                  <form (submit)="$event.preventDefault(); saveFirebaseConnection()">
+                    <label>Database URL <input type="url" required autocomplete="off" [value]="firebaseUrl()" (input)="firebaseUrl.set($any($event.target).value)" placeholder="https://example-default-rtdb.firebaseio.com" /></label>
+                    <label>Project ID <input type="text" required autocomplete="off" [value]="firebaseProjectId()" (input)="firebaseProjectId.set($any($event.target).value)" /></label>
+                    <label>Client email <input type="email" required autocomplete="off" [value]="firebaseClientEmail()" (input)="firebaseClientEmail.set($any($event.target).value)" /></label>
+                    <label>Private key <textarea required autocomplete="off" [value]="firebasePrivateKey()" (input)="firebasePrivateKey.set($any($event.target).value)"></textarea></label>
+                    <button type="submit" [disabled]="storagePending() || !firebaseUrl().trim() || !firebaseProjectId().trim() || !firebaseClientEmail().trim() || !firebasePrivateKey().trim()">Сохранить подключение локально</button>
+                  </form>
+                </section>
+              </div>
+              <aside class="storage-aside" aria-label="Состояние хранения">
+                <div class="storage-status"><span class="storage-status-dot"></span><strong>Локальная SQLite активна</strong><p>API и MCP продолжают писать в локальную базу. Firebase нельзя выбрать для проекта до завершения смешанного чтения и удалённой обработки задач.</p></div>
+                <div class="storage-hint"><strong>Данные ключа</strong><p>Private key хранится на сервере, не возвращается в браузер и не записывается в репозиторий.</p></div>
+                <a href="/" class="storage-back">Вернуться к заметкам</a>
+              </aside>
+            </div>
+          </div>
+        } @else {
+        @if (setupOpen()) {
+          <section class="setup-panel" aria-label="Локальная настройка репозитория">
+            <div class="setup-heading"><h2>Подключить репозиторий</h2><button type="button" (click)="setupOpen.set(false); setupPreview.set(null)">Закрыть</button></div>
+            <p>Общий сайт остаётся на этом компьютере. Укажите абсолютный путь к корню существующего Git-репозитория. Изменения вносятся только после подтверждения.</p>
+            <label>Путь к репозиторию <input type="text" [value]="setupPath()" (input)="changeSetupPath($any($event.target).value)" placeholder="Абсолютный локальный путь" /></label>
+            <button type="button" [disabled]="!setupPath().trim() || setupPending()" (click)="previewSetup()">Показать изменения</button>
+            @if (setupPreview(); as preview) {
+              <div class="setup-preview">
+                <strong>Будет изменено в {{ preview.repository }}:</strong>
+                <ul>@for (file of preview.files; track file.path) { <li><code>{{ file.path }}</code>: {{ file.action }}</li> }</ul>
+                <p>OpenCode: <code>dotnet {{ preview.mcpDll }}</code></p>
+                <p>Ярлык откроет: <code>{{ preview.siteUrl }}</code></p>
+                <p class="setup-warning">{{ preview.warning }}</p>
+                <button type="button" [disabled]="setupPending()" (click)="confirmSetup()">Подтвердить изменения</button>
+              </div>
+            }
+          </section>
+        }
         <section class="section-heading">
           <div><h1>{{ workspace() === 'notes' ? 'Заметки' : 'Задачи' }}</h1><p>{{ selectedProject()?.name ?? 'Все проекты' }}</p></div>
-          @if (selectedProject(); as project) {
-            <div class="project-access" [class.granted]="project.aiAccessGranted">
-              <span><i></i>OpenCode: {{ project.aiAccessGranted ? 'чтение разрешено' : 'нет доступа' }}</span>
-              <button type="button" [disabled]="actionPending()" (click)="setProjectAiAccess(project, !project.aiAccessGranted)">
-                {{ project.aiAccessGranted ? 'Отозвать' : 'Разрешить чтение' }}
-              </button>
-            </div>
-          }
+          @if (selectedProject()) { <button class="project-settings-toggle" type="button" [attr.aria-expanded]="projectSettingsOpen()" (click)="toggleProjectSettings()">Настройки проекта</button> }
           <div class="toolbar-filters" role="group" aria-label="Фильтр по статусу">
             @if (workspace() === 'notes') {
               @for (status of noteStatusOptions; track status.value) {
@@ -95,6 +156,67 @@
             }
           </div>
         </section>
+
+        @if (projectSettingsOpen() && selectedProject(); as project) {
+          <section class="setup-panel project-settings" aria-label="Настройки проекта">
+            <div class="setup-heading"><h2>{{ project.name }}</h2><button type="button" (click)="projectSettingsOpen.set(false)">Закрыть</button></div>
+            <p>Путь на этом компьютере: <code>{{ project.primaryPath }}</code></p>
+            <div class="project-access" [class.granted]="project.aiAccessGranted">
+              <span><i></i>OpenCode: {{ project.aiAccessGranted ? 'чтение разрешено' : 'нет доступа' }}</span>
+              <button type="button" [disabled]="actionPending()" (click)="setProjectAiAccess(project, !project.aiAccessGranted)">
+                {{ project.aiAccessGranted ? 'Отозвать доступ' : 'Разрешить чтение кода' }}
+              </button>
+            </div>
+            <button type="button" (click)="openSetup()">Подключить MCP и ссылку на сайт к репозиторию</button>
+            <div class="setup-preview">
+              <h3>Хранилище новых записей</h3>
+              <p>Сейчас заметки и задачи этого проекта сохраняются в локальной SQLite. Старые записи останутся доступны при будущем выборе Firebase.</p>
+              <label>Хранилище проекта
+                <select disabled aria-label="Хранилище проекта">
+                  <option>Локальная SQLite</option>
+                  <option>Firebase (пока недоступно)</option>
+                </select>
+              </label>
+              <p>Firebase нельзя выбрать, пока сайт и MCP не умеют сохранять и вместе показывать заметки и задачи из обеих баз.</p>
+            </div>
+            <div class="setup-preview">
+              <h3>Предпросмотр переноса старых записей</h3>
+              <p>Просмотр не меняет локальные данные и не отправляет их в Firebase.</p>
+              <button type="button" [disabled]="storagePending()" (click)="showTransferPreview()">Показать состав проекта</button>
+              @if (transferPreview(); as preview) {
+                <p>Заметок {{ preview.counts.reports }}, предложений {{ preview.counts.proposals }}, задач {{ preview.counts.tasks }}, связей {{ preview.counts.reportTaskLinks }}.</p>
+                <p>Контрольная сумма: <code>{{ preview.sha256 }}</code></p>
+              }
+            </div>
+            <div class="setup-preview">
+              <h3>Общие проекты Firebase</h3>
+              @if (storageStatus()?.hasFirebaseConnection) {
+                <p>Привязка пути и разрешение AI действуют только на этом компьютере. Записи пока остаются в SQLite.</p>
+                <button type="button" [disabled]="storagePending()" (click)="loadRemoteProjects()">Обновить проекты</button>
+                <form (submit)="$event.preventDefault(); createRemoteProject()">
+                  <label>Новый общий проект <input type="text" required [value]="remoteProjectName()" (input)="remoteProjectName.set($any($event.target).value)" /></label>
+                  <button type="submit" [disabled]="storagePending() || !remoteProjectName().trim()">Создать в Firebase</button>
+                </form>
+                @for (remote of remoteProjects(); track remote.id) {
+                  <section>
+                    <h4>{{ remote.name }} <small>#{{ remote.id }}</small></h4>
+                    <label>Локальный путь <input type="text" [value]="remotePath(remote.id)" (input)="setRemotePath(remote.id, $any($event.target).value)" /></label>
+                    <button type="button" [disabled]="storagePending() || !remotePath(remote.id).trim()" (click)="bindRemoteProject(remote.id)">Привязать путь</button>
+                    @if (remoteBinding(remote.id); as binding) {
+                      <p>Привязан: {{ binding.localPath }}</p>
+                      <button type="button" [disabled]="storagePending()" (click)="setRemoteAiConsent(remote.id, !binding.aiReadConsent)">
+                        {{ binding.aiReadConsent ? 'Запретить AI чтение' : 'Разрешить AI чтение на этой машине' }}
+                      </button>
+                    }
+                  </section>
+                }
+              } @else {
+                <p>Чтобы управлять общими проектами, сначала укажите данные Firebase в настройках BoyScout.</p>
+                <a href="/settings/storage">Настроить Firebase</a>
+              }
+            </div>
+          </section>
+        }
 
         <section class="toolbar">
           <label class="search">
@@ -117,7 +239,7 @@
                     <span class="record-main">
                       <span class="record-title"><i class="status-dot" [attr.data-state]="reviewState(note)"></i><strong>{{ note.title }}</strong></span>
                       <small>{{ note.observation }}</small>
-                      <span class="record-meta"><em>{{ projectLabel(note) }}</em><span class="review-label">{{ reviewStateLabel(reviewState(note)) }}</span><span>{{ note.id }}</span><time>{{ formatDate(note.createdAt) }}</time></span>
+                       <span class="record-meta"><em>{{ projectLabel(note) }}</em>@if (note.sourceName) { <span>{{ note.sourceName }}</span> }<span class="review-label">{{ noteReviewLabel(note) }}</span><span>{{ note.id }}</span><time>{{ formatDate(note.createdAt) }}</time></span>
                     </span>
                     <span class="row-menu">⋮</span>
                   </button>
@@ -133,42 +255,72 @@
                   <button class="focus-button" type="button" (click)="focusMode.set(!focusMode())">{{ focusMode() ? 'Свернуть' : 'Фокус' }}</button>
                 </div>
                 <h2>{{ note.title }}</h2>
-                <div class="detail-metadata"><span><i class="status-dot" [attr.data-state]="reviewState(note)"></i>{{ reviewStateLabel(reviewState(note)) }}</span><span>{{ projectLabel(note) }}</span><time>{{ formatDate(note.createdAt) }}</time></div>
+                <div class="detail-metadata"><span><i class="status-dot" [attr.data-state]="reviewState(note)"></i>{{ noteReviewLabel(note) }}</span><span>{{ projectLabel(note) }}</span>@if (note.sourceName) { <span>Источник: {{ note.sourceName }}</span> }<time>{{ formatDate(note.createdAt) }}</time></div>
                 <div class="detail-actions">
                   <button type="button" (click)="openProject(note)">Открыть проект</button>
                   <button type="button" (click)="copyText(note.project, 'Путь проекта скопирован')">Копировать путь</button>
-                  @if (canRejectNote(note) && reviewState(note) !== 'awaiting_decision' && selectedProposal()?.reviewIntent !== 'rejection') {
-                    <button class="reject-action" type="button" [disabled]="actionPending()" (click)="clarificationFormOpen.set(false); rejectionFormOpen.set(true)">Отклонить</button>
-                  }
                 </div>
-
+                <div class="note-narrative">
+                  <section class="observation-card"><h3>Наблюдение</h3><p>{{ note.observation }}</p></section>
+                  @if (note.impact) { <section class="impact-card"><h3>Почему важно</h3><p>{{ note.impact }}</p></section> }
+                  @if (note.suggestedAction) { <section class="idea-card"><h3>Первичная мысль</h3><p>{{ note.suggestedAction }}</p></section> }
+                </div>
+                <div class="review-area">
+                  <h3 class="review-heading">Проверка и решение</h3>
+                  @if (selectedWorkflow()?.agentCheckedAt; as checkedAt) { <p class="review-time">Агент проверил {{ formatDate(checkedAt) }}</p> }
+                  @if (selectedProposal()?.requestedClarification; as clarification) {
+                    <section class="workflow-card"><b>Комментарий при возврате в очередь</b><p>{{ clarification }}</p></section>
+                  }
+                  @if (canRejectNote(note) && reviewState(note) !== 'awaiting_decision' && selectedProposal()?.reviewIntent !== 'rejection') {
+                    <div class="detail-actions review-actions"><button class="reject-action" type="button" [disabled]="actionPending()" (click)="clarificationFormOpen.set(false); rejectionFormOpen.set(true)">Отклонить</button></div>
+                  }
                 @if (reviewState(note) === 'queued') {
-                  <section class="workflow-card queued-card"><h3>В очереди на обработку</h3><p>OpenCode проверит заметку, когда дойдёт её очередь.</p>@if (selectedProposal()?.requestedClarification; as clarification) { <b>Что уточнить</b><p>{{ clarification }}</p> }</section>
-                } @else if (reviewState(note) === 'checking') {
-                  <section class="workflow-card checking-card"><span class="spinner"></span><div><h3>Проверяется агентом</h3><p>OpenCode сверяет заметку с текущим состоянием проекта.</p>@if (selectedProposal()?.requestedClarification; as clarification) { <b>Что уточнить</b><p>{{ clarification }}</p> }<button type="button" [disabled]="actionPending() || selectedProposal()?.state !== 'processing'" (click)="requeueSelected()">Вернуть в очередь</button></div></section>
+                   <section class="workflow-card queued-card">
+                     <h3>В очереди на обработку</h3>
+                     @if (noteProject(note); as project) {
+                       @if (project.aiAccessGranted) {
+                         <p>OpenCode проверит заметку, когда дойдёт её очередь.</p>
+                       } @else {
+                         <p class="queue-blocked">Проверка не начнётся: этому проекту ещё не разрешено чтение кода.</p>
+                         <button type="button" (click)="openNoteProjectSettings(note)">Открыть настройки проекта</button>
+                       }
+                     } @else {
+                       <p>Не удалось сопоставить путь заметки с локальным проектом. Проверьте проект и разрешение AI перед повторной обработкой.</p>
+                     }
+                    </section>
+                  } @else if (reviewState(note) === 'checking') {
+                    <section class="workflow-card checking-card"><span class="spinner"></span><div><h3>Проверяется агентом</h3><p>OpenCode сверяет заметку с текущим состоянием проекта.</p></div></section>
+                   @if (selectedProposal()?.state === 'processing') {
+                     <section class="rejection-form">
+                       <h3>Вернуть в очередь</h3>
+                        <p>Укажите, что OpenCode должен проверить при повторной обработке.</p>
+                        <textarea aria-label="Комментарий для повторной проверки" maxlength="2000" placeholder="Комментарий для OpenCode (обязательно)" [value]="processingComment()" (input)="updateProcessingComment($event)"></textarea>
+                       <small>{{ processingComment().length }} / 2000</small>
+                        <div><button class="primary-action" type="button" [disabled]="actionPending() || !processingComment().trim()" (click)="requeueSelected()">Вернуть в очередь</button></div>
+                     </section>
+                   }
                 } @else if (reviewState(note) === 'awaiting_decision') {
                   @if (selectedProposal(); as draft) {
                     <section class="agent-decision" [attr.data-decision]="draft.recommendedAction ?? 'none'">
-                      <div class="agent-decision-head"><span>Решение агента</span><strong>{{ draft.recommendedAction === 'create_task' ? 'Перевести в задачу' : draft.recommendedAction === 'reject' ? 'Отклонить' : 'Решение не принято' }}</strong></div>
+                      <div class="agent-verification"><b>Что проверил агент</b><p>{{ draft.verificationSummary ?? draft.error ?? 'Проверка отдельно не зафиксирована' }}</p></div>
+                      <div class="agent-decision-head"><span>Вывод агента</span><strong>{{ draft.recommendedAction === 'create_task' ? 'Перевести в задачу' : draft.recommendedAction === 'reject' ? 'Отклонить' : 'Решение не принято' }}</strong></div>
                       @if (draft.recommendedAction === 'create_task' && draft.state === 'ready') {
                         <h3>Черновик задачи</h3>
                         <h4>{{ draft.title }}</h4>
+                        @if (draft.currentConsequences) { <div><b>Последствия текущей логики</b><p>{{ draft.currentConsequences }}</p></div> }
                         <div><b>Что сделать</b><p>{{ draft.description }}</p></div>
                         <div><b>Критерии готовности</b><p>{{ draft.acceptanceCriteria }}</p></div>
-                        <div class="agent-verification"><b>Что проверил агент</b><p>{{ draft.verificationSummary ?? 'Проверка не зафиксирована' }}</p></div>
                         <div class="detail-decision-actions"><button class="reject-action" type="button" [disabled]="actionPending()" (click)="clarificationFormOpen.set(false); rejectionFormOpen.set(true)">Отклонить</button><button type="button" [disabled]="actionPending()" (click)="rejectionFormOpen.set(false); clarificationFormOpen.set(true)">Вернуть на уточнение</button><button class="primary-action" type="button" [disabled]="actionPending()" (click)="confirmProposal()">Создать задачу</button></div>
                       } @else if (draft.recommendedAction === 'reject' && draft.state === 'ready') {
                         <div><b>Итоговая причина отклонения</b><p>{{ draft.finalRejectionReason ?? 'Итоговая причина не зафиксирована' }}</p></div>
-                        <div class="agent-verification"><b>Что проверил агент</b><p>{{ draft.verificationSummary ?? 'Проверка не зафиксирована' }}</p></div>
                         <div class="detail-decision-actions"><button type="button" [disabled]="actionPending()" (click)="editRejectionReason()">Предложить другую причину</button><button type="button" [disabled]="actionPending()" (click)="rejectionFormOpen.set(false); clarificationFormOpen.set(true)">Вернуть на уточнение</button><button class="reject-confirm-action" type="button" [disabled]="actionPending()" (click)="confirmAgentRejection()">Подтвердить отклонение</button></div>
                       } @else {
-                        <div class="agent-verification"><b>Что проверил агент</b><p>{{ draft.verificationSummary ?? draft.error ?? 'OpenCode не смог принять подтверждённое решение.' }}</p></div>
                         @if (selectedWorkflow()?.submittedRejectionReason ?? draft.requestedRejectionReason; as submittedReason) { <div><b>Предложенная причина отклонения</b><p>{{ submittedReason }}</p></div> }
                         <div class="detail-decision-actions"><button class="reject-action" type="button" [disabled]="actionPending()" (click)="editRejectionReason()">{{ draft.reviewIntent === 'rejection' ? 'Изменить причину' : 'Отклонить' }}</button><button type="button" [disabled]="actionPending()" (click)="rejectionFormOpen.set(false); clarificationFormOpen.set(true)">Вернуть на уточнение</button></div>
                       }
                     </section>
                   } @else {
-                    <section class="agent-decision" data-decision="none"><div class="agent-decision-head"><span>Решение агента</span><strong>Решение не принято</strong></div><p>Результат проверки не найден. Обновите данные или верните заметку на уточнение.</p><div class="detail-decision-actions"><button class="reject-action" type="button" [disabled]="actionPending()" (click)="rejectionFormOpen.set(true)">Отклонить</button><button type="button" [disabled]="actionPending()" (click)="clarificationFormOpen.set(true)">Вернуть на уточнение</button></div></section>
+                    <section class="agent-decision" data-decision="none"><p>Результат проверки не найден. Обновите данные или верните заметку на уточнение.</p><div class="detail-decision-actions"><button class="reject-action" type="button" [disabled]="actionPending()" (click)="rejectionFormOpen.set(true)">Отклонить</button><button type="button" [disabled]="actionPending()" (click)="clarificationFormOpen.set(true)">Вернуть на уточнение</button></div></section>
                   }
                 }
 
@@ -185,10 +337,10 @@
                 @if (clarificationFormOpen()) {
                   <section class="rejection-form clarification-form">
                     <h3>Вернуть на уточнение</h3>
-                    <p>Опишите, что именно OpenCode должен дополнительно проверить или изменить в предложении. Заметка вернётся в очередь.</p>
-                    <textarea maxlength="2000" placeholder="Например: проверь сценарий без доступа и уточни критерии готовности" [value]="clarificationInstruction()" (input)="updateClarificationInstruction($event)"></textarea>
-                    <small>{{ clarificationInstruction().length }} / 2000</small>
-                    <div><button type="button" [disabled]="actionPending()" (click)="clarificationFormOpen.set(false)">Отмена</button><button class="primary-action" type="button" [disabled]="!clarificationInstruction().trim() || actionPending()" (click)="requestClarification()">Вернуть в очередь</button></div>
+                     <p>Опишите, что именно OpenCode должен дополнительно проверить или изменить в предложении. Комментарий обязателен.</p>
+                     <textarea aria-label="Комментарий для уточнения" maxlength="2000" placeholder="Комментарий для OpenCode (обязательно)" [value]="clarificationInstruction()" (input)="updateClarificationInstruction($event)"></textarea>
+                     <small>{{ clarificationInstruction().length }} / 2000</small>
+                     <div><button type="button" [disabled]="actionPending()" (click)="clarificationFormOpen.set(false)">Отмена</button><button class="primary-action" type="button" [disabled]="actionPending() || !clarificationInstruction().trim()" (click)="requestClarification()">Вернуть в очередь</button></div>
                   </section>
                 }
 
@@ -198,27 +350,37 @@
                     <b>Итоговая причина отклонения</b><p>{{ selectedWorkflow()?.finalRejectionReason ?? 'Отдельная итоговая причина не зафиксирована (legacy-запись)' }}</p>
                     @if (selectedWorkflow()?.submittedRejectionReason; as submittedReason) { <b>Предложенная пользователем причина</b><p>{{ submittedReason }}</p> }
                     <b>Что проверил агент</b><p>{{ selectedWorkflow()?.agentVerification ?? (selectedWorkflow()?.finalRejectionReason ? 'Проверка агента отдельно не зафиксирована' : selectedWorkflow()?.reason) ?? 'Проверка агента не зафиксирована' }}</p>
-                    @if (selectedWorkflow()?.updatedAt; as rejectedAt) { <small>Решение зафиксировано {{ formatDate(rejectedAt) }}</small> }
-                    <button type="button" [disabled]="actionPending()" (click)="restoreNote()">Восстановить</button>
-                  </section>
-                }
+                    @if (selectedWorkflow()?.humanRejectedAt; as rejectedAt) { <small>Человек отклонил {{ formatDate(rejectedAt) }}</small> }
+                     <button type="button" [disabled]="actionPending()" (click)="restoreFormOpen.set(true)">Восстановить</button>
+                   </section>
+                 }
+                 @if (restoreFormOpen()) {
+                   <section class="rejection-form">
+                     <h3>Восстановить заметку?</h3>
+                     <p>Заметка вернётся в очередь на обработку. Укажите причину повторной проверки.</p>
+                     <textarea aria-label="Комментарий при восстановлении" maxlength="2000" placeholder="Комментарий для OpenCode (обязательно)" [value]="restoreComment()" (input)="updateRestoreComment($event)"></textarea>
+                     <small>{{ restoreComment().length }} / 2000</small>
+                     <div><button type="button" [disabled]="actionPending()" (click)="restoreFormOpen.set(false)">Отмена</button><button class="primary-action" type="button" [disabled]="actionPending() || !restoreComment().trim()" (click)="restoreNote()">Вернуть в очередь</button></div>
+                   </section>
+                 }
                 @if (reviewState(note) === 'processed') {
                   <section class="workflow-card processed-card">
                     <h3>Обработана</h3>
                     <p>Заметка отмечена обработанной. Связанная задача могла быть не создана.</p>
+                    @if (selectedWorkflow()?.humanApprovedAt; as approvedAt) { <small>Человек одобрил {{ formatDate(approvedAt) }}</small> }
                     <button type="button" [disabled]="actionPending()" (click)="reprocessConfirmationOpen.set(true)">Вернуть в обработку</button>
                   </section>
                 }
                 @if (reprocessConfirmationOpen()) {
                   <section class="rejection-form reprocess-confirmation">
-                    <h3>Вернуть заметку в очередь?</h3>
-                    <p>Если есть связанная задача, она будет удалена вместе со связью. Заметка пройдёт проверку заново.</p>
-                    <div><button type="button" [disabled]="actionPending()" (click)="reprocessConfirmationOpen.set(false)">Отмена</button><button class="reject-confirm-action" type="button" [disabled]="actionPending()" (click)="reprocessCompletedNote()">Вернуть в очередь</button></div>
+                     <h3>Вернуть заметку в очередь?</h3>
+                     <p>Если есть связанная задача, она будет удалена вместе со связью. Заметка пройдёт проверку заново.</p>
+                     <textarea aria-label="Комментарий при повторной обработке" maxlength="2000" placeholder="Комментарий для OpenCode (обязательно)" [value]="reprocessComment()" (input)="updateReprocessComment($event)"></textarea>
+                     <small>{{ reprocessComment().length }} / 2000</small>
+                     <div><button type="button" [disabled]="actionPending()" (click)="reprocessConfirmationOpen.set(false)">Отмена</button><button class="reject-confirm-action" type="button" [disabled]="actionPending() || !reprocessComment().trim()" (click)="reprocessCompletedNote()">Вернуть в очередь</button></div>
                   </section>
                 }
-                <section class="observation-card"><h3>Наблюдение</h3><p>{{ note.observation }}</p></section>
-                @if (note.impact) { <section class="impact-card"><h3>Почему важно</h3><p>{{ note.impact }}</p></section> }
-                @if (note.suggestedAction) { <section class="idea-card"><h3>Первичная мысль</h3><p>{{ note.suggestedAction }}</p></section> }
+                </div>
                 <dl>
                   @if (note.location) { <div><dt>Где найдено</dt><dd><code title="Скопировать" (click)="copyText(note.location, 'Путь скопирован')">{{ note.location }}</code></dd></div> }
                   @if (note.discoveredDuring) { <div><dt>Контекст</dt><dd>{{ note.discoveredDuring }}</dd></div> }
@@ -230,19 +392,22 @@
         } @else {
           <div class="workspace">
             <section class="records" aria-label="Список задач">
-              @if (filteredTasks().length === 0) {
+              @if (taskLoading()) {
+                <div class="empty-state"><span class="spinner"></span><p>Загружаем задачи...</p></div>
+              } @else if (tasks().length === 0) {
                 <div class="empty-state"><span>✓</span><h3>Задач пока нет</h3><p>Подтвердите черновик OpenCode в разделе заметок.</p></div>
               } @else {
-                @for (task of filteredTasks(); track task.id) {
+                @for (task of tasks(); track task.id) {
                   <button class="record-row" [class.selected]="selectedTask()?.id === task.id" type="button" (click)="selectTask(task)">
                     <span class="record-main">
                       <span class="record-title"><i class="status-dot" [attr.data-state]="task.status"></i><strong>{{ task.title }}</strong></span>
                       <small>{{ task.description }}</small>
-                      <span class="record-meta"><em>{{ projectName(task.projectId) }}</em><span>{{ task.id }}</span><time>{{ formatDate(task.updatedAt) }}</time></span>
+                       <span class="record-meta"><em>{{ projectName(task.projectId) }}</em>@if (task.confirmerName) { <span>Подтвердил: {{ task.confirmerName }}</span> }<span>{{ task.id }}</span><time>{{ formatDate(task.updatedAt) }}</time></span>
                     </span>
                     <span class="row-menu">⋮</span>
                   </button>
                 }
+                @if (taskNextBefore() !== null) { <button class="load-more" type="button" [disabled]="taskLoadingMore()" (click)="loadMoreTasks()">{{ taskLoadingMore() ? 'Загружаем...' : 'Показать ещё' }}</button> }
               }
             </section>
 
@@ -250,13 +415,15 @@
               @if (selectedTask(); as task) {
                 <div class="details-head"><button type="button" (click)="copyId(task.id)">{{ task.id }}</button><span><i class="status-dot" [attr.data-state]="task.status"></i>{{ taskStatusLabel(task) }}</span></div>
                 <h2>{{ task.title }}</h2><p class="detail-project">{{ projectName(task.projectId) }}</p>
-                <section><h3>Что сделать</h3><p>{{ task.description }}</p></section>
+                 @if (task.currentConsequences) { <section class="impact-card"><h3>Последствия текущей логики</h3><p>{{ task.currentConsequences }}</p></section> }
+                 <section><h3>Что сделать</h3><p>{{ task.description }}</p></section>
                 <section class="criteria"><h3>Критерии готовности</h3><p>{{ task.acceptanceCriteria }}</p></section>
-                <dl><div><dt>Исходные заметки</dt><dd>{{ task.sourceReportIds.join(', ') }}</dd></div><div><dt>Создана</dt><dd>{{ formatDate(task.createdAt) }}</dd></div></dl>
+                 <dl><div><dt>Исходные заметки</dt><dd>{{ task.sourceReportIds.join(', ') }}</dd></div>@if (taskSourceNames().length) { <div><dt>Источники</dt><dd>{{ taskSourceNames().join(', ') }}</dd></div> }@if (task.confirmerName) { <div><dt>Подтвердил</dt><dd>{{ task.confirmerName }}</dd></div> }<div><dt>Создана</dt><dd>{{ formatDate(task.createdAt) }}</dd></div></dl>
                 <button class="task-action" type="button" [disabled]="actionPending()" (click)="toggleTask(task)">{{ task.status === 'done' ? 'Вернуть к выполнению' : 'Отметить выполненной' }}</button>
               } @else { <div class="empty-state"><span>✓</span><p>Выберите задачу.</p></div> }
             </aside>
           </div>
+        }
         }
       </main>
     </div>

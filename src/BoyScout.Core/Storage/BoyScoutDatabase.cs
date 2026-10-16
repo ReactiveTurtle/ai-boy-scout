@@ -4,7 +4,7 @@ namespace BoyScout.Core.Storage;
 
 public sealed class BoyScoutDatabase(string databasePath)
 {
-    public const int CurrentSchemaVersion = 9;
+    public const int CurrentSchemaVersion = 12;
 
     public string DatabasePath { get; } = Path.GetFullPath(databasePath);
 
@@ -93,6 +93,27 @@ public sealed class BoyScoutDatabase(string databasePath)
         if (currentVersion == 9)
         {
             ValidateVersionNine(connection);
+            ApplyVersionTen(connection);
+            currentVersion = 10;
+        }
+
+        if (currentVersion == 10)
+        {
+            ValidateVersionTen(connection);
+            ApplyVersionEleven(connection);
+            currentVersion = 11;
+        }
+
+        if (currentVersion == 11)
+        {
+            ValidateVersionEleven(connection);
+            ApplyVersionTwelve(connection);
+            currentVersion = 12;
+        }
+
+        if (currentVersion == 12)
+        {
+            ValidateVersionTwelve(connection);
         }
 
         EnableWriteAheadLogging(connection);
@@ -1355,6 +1376,113 @@ public sealed class BoyScoutDatabase(string databasePath)
         }
     }
 
+    private static void ApplyVersionTen(SqliteConnection connection)
+    {
+        using var transaction = connection.BeginTransaction();
+        Execute(connection, transaction,
+            """
+            ALTER TABLE reports ADD COLUMN source_name TEXT;
+            ALTER TABLE reports ADD COLUMN source_installation_id TEXT;
+            ALTER TABLE tasks ADD COLUMN confirmer_name TEXT;
+            ALTER TABLE tasks ADD COLUMN confirmer_installation_id TEXT;
+            """);
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "INSERT INTO schema_migrations (version, name, applied_at) VALUES (10, $name, $appliedAt);";
+        command.Parameters.AddWithValue("$name", "installation_authors");
+        command.Parameters.AddWithValue("$appliedAt", DateTimeOffset.UtcNow.ToString("O"));
+        command.ExecuteNonQuery();
+        Execute(connection, transaction, "PRAGMA user_version = 10;");
+        transaction.Commit();
+    }
+
+    private static void ValidateVersionTen(SqliteConnection connection)
+    {
+        ValidateVersionNine(connection);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM schema_migrations WHERE version = 10 AND name = 'installation_authors';";
+        if (Convert.ToInt32(command.ExecuteScalar()) != 1)
+            throw new InvalidOperationException("Database schema version 10 has no installation authors migration record.");
+        ValidateTableColumns(connection, "reports", new Dictionary<string, ColumnDefinition>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["source_name"] = new("TEXT", false, false),
+            ["source_installation_id"] = new("TEXT", false, false),
+        }, additionalOnly: true);
+        ValidateTableColumns(connection, "tasks", new Dictionary<string, ColumnDefinition>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["confirmer_name"] = new("TEXT", false, false),
+            ["confirmer_installation_id"] = new("TEXT", false, false),
+        }, additionalOnly: true);
+    }
+
+    private static void ApplyVersionEleven(SqliteConnection connection)
+    {
+        using var transaction = connection.BeginTransaction();
+        Execute(connection, transaction,
+            """
+            ALTER TABLE task_proposals ADD COLUMN agent_checked_at TEXT;
+            ALTER TABLE task_proposals ADD COLUMN human_approved_at TEXT;
+            ALTER TABLE task_proposals ADD COLUMN human_rejected_at TEXT;
+            """);
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "INSERT INTO schema_migrations (version, name, applied_at) VALUES (11, $name, $appliedAt);";
+        command.Parameters.AddWithValue("$name", "proposal_decision_timestamps");
+        command.Parameters.AddWithValue("$appliedAt", DateTimeOffset.UtcNow.ToString("O"));
+        command.ExecuteNonQuery();
+        Execute(connection, transaction, "PRAGMA user_version = 11;");
+        transaction.Commit();
+    }
+
+    private static void ValidateVersionEleven(SqliteConnection connection)
+    {
+        ValidateVersionTen(connection);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM schema_migrations WHERE version = 11 AND name = 'proposal_decision_timestamps';";
+        if (Convert.ToInt32(command.ExecuteScalar()) != 1)
+            throw new InvalidOperationException("Database schema version 11 has no proposal decision timestamps migration record.");
+        ValidateTableColumns(connection, "task_proposals", new Dictionary<string, ColumnDefinition>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["agent_checked_at"] = new("TEXT", false, false),
+            ["human_approved_at"] = new("TEXT", false, false),
+            ["human_rejected_at"] = new("TEXT", false, false),
+        }, additionalOnly: true);
+    }
+
+    private static void ApplyVersionTwelve(SqliteConnection connection)
+    {
+        using var transaction = connection.BeginTransaction();
+        Execute(connection, transaction,
+            """
+            ALTER TABLE task_proposals ADD COLUMN current_consequences TEXT;
+            ALTER TABLE tasks ADD COLUMN current_consequences TEXT;
+            """);
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "INSERT INTO schema_migrations (version, name, applied_at) VALUES (12, $name, $appliedAt);";
+        command.Parameters.AddWithValue("$name", "task_current_consequences");
+        command.Parameters.AddWithValue("$appliedAt", DateTimeOffset.UtcNow.ToString("O"));
+        command.ExecuteNonQuery();
+        Execute(connection, transaction, "PRAGMA user_version = 12;");
+        transaction.Commit();
+    }
+
+    private static void ValidateVersionTwelve(SqliteConnection connection)
+    {
+        ValidateVersionEleven(connection);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM schema_migrations WHERE version = 12 AND name = 'task_current_consequences';";
+        if (Convert.ToInt32(command.ExecuteScalar()) != 1)
+            throw new InvalidOperationException("Database schema version 12 has no task consequences migration record.");
+        foreach (var table in new[] { "task_proposals", "tasks" })
+        {
+            ValidateTableColumns(connection, table, new Dictionary<string, ColumnDefinition>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["current_consequences"] = new("TEXT", false, false),
+            }, additionalOnly: true);
+        }
+    }
+
     private static void ValidateReportsTable(
         SqliteConnection connection,
         bool includeProjectId)
@@ -1397,7 +1525,8 @@ public sealed class BoyScoutDatabase(string databasePath)
     private static void ValidateTableColumns(
         SqliteConnection connection,
         string tableName,
-        IReadOnlyDictionary<string, ColumnDefinition> expectedColumns)
+        IReadOnlyDictionary<string, ColumnDefinition> expectedColumns,
+        bool additionalOnly = false)
     {
         if (!TableExists(connection, tableName))
         {
@@ -1420,7 +1549,17 @@ public sealed class BoyScoutDatabase(string databasePath)
             }
         }
 
-        if (actualColumns.Count != expectedColumns.Count ||
+        var version = ReadUserVersion(connection);
+        string[] extraAuthors = version >= 10 && !additionalOnly ? tableName switch
+        {
+            "reports" => new[] { "source_name", "source_installation_id" },
+            "tasks" when version >= 12 => new[] { "confirmer_name", "confirmer_installation_id", "current_consequences" },
+            "tasks" => new[] { "confirmer_name", "confirmer_installation_id" },
+            "task_proposals" when version >= 12 => new[] { "agent_checked_at", "human_approved_at", "human_rejected_at", "current_consequences" },
+            "task_proposals" when version >= 11 => new[] { "agent_checked_at", "human_approved_at", "human_rejected_at" },
+            _ => [],
+        } : [];
+        if ((!additionalOnly && actualColumns.Count != expectedColumns.Count + extraAuthors.Length) ||
             expectedColumns.Any(expected =>
                 !actualColumns.TryGetValue(expected.Key, out var actual) || actual != expected.Value))
         {

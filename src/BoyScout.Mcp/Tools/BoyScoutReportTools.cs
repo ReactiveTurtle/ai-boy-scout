@@ -23,7 +23,7 @@ public sealed class BoyScoutReportTools
     [Description(
         "Record a verified issue discovered outside the current task scope. This does not authorize fixing it.")]
     public static string Add(
-        ReportStore store,
+        IReportStore store,
         [Description("Short actionable title")] string title,
         [Description("Verified current behavior or condition")] string observation,
         [Description("Project path; defaults to the server working directory")] string? project = null,
@@ -59,7 +59,7 @@ public sealed class BoyScoutReportTools
         OpenWorld = false)]
     [Description("List recent Boy Scout reports, optionally filtered by project and status.")]
     public static string List(
-        ReportStore store,
+        IReportStore store,
         [Description("Project path; omit to list reports from all projects")] string? project = null,
         [Description("Optional report status")] ReportStatusArgument? status = null,
         [Description("Maximum number of reports from 1 to 100")] int limit = 50)
@@ -82,7 +82,7 @@ public sealed class BoyScoutReportTools
         OpenWorld = false)]
     [Description("Get one Boy Scout report by its stable ID.")]
     public static string Get(
-        ReportStore store,
+        IReportStore store,
         [Description("Report ID, for example BSR-000001")] string id)
     {
         try
@@ -103,7 +103,7 @@ public sealed class BoyScoutReportTools
         OpenWorld = false)]
     [Description("Change workflow status without altering the original observation.")]
     public static string UpdateStatus(
-        ReportStore store,
+        IReportStore store,
         [Description("Report ID, for example BSR-000001")] string id,
         [Description("New report status")] ReportStatusArgument status)
     {

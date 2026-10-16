@@ -87,6 +87,9 @@ try {
   if (created.id !== "BSR-000002" || created.status !== "open") {
     throw new Error("boy_scout_add returned an unexpected report");
   }
+  if (created.source_name !== "BoyScout" || !created.source_installation_id) {
+    throw new Error("boy_scout_add did not persist the installation source");
+  }
 
   const listed = parseResult(
     await client.callTool({
@@ -121,8 +124,8 @@ try {
 
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
-    if (database.prepare("PRAGMA user_version").get().user_version !== 9) {
-      throw new Error("The .NET MCP did not migrate the legacy database to version 9");
+    if (database.prepare("PRAGMA user_version").get().user_version !== 12) {
+      throw new Error("The .NET MCP did not migrate the legacy database to version 12");
     }
     if (database.prepare("SELECT COUNT(*) AS count FROM reports WHERE project_id IS NULL").get().count !== 0) {
       throw new Error("The .NET MCP left reports without stable projects");

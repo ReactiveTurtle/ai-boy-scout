@@ -1,10 +1,11 @@
 using System.Globalization;
 using BoyScout.Core.Storage;
+using BoyScout.Core.Storage.Config;
 using Microsoft.Data.Sqlite;
 
 namespace BoyScout.Core.Reports;
 
-public sealed class ReportStore(BoyScoutDatabase database)
+public sealed class ReportStore(BoyScoutDatabase database, BoyScoutConfigService? config = null) : IReportStore
 {
     public ReportPage Browse(
         long? projectId,
@@ -118,7 +119,8 @@ public sealed class ReportStore(BoyScoutDatabase database)
                         WHERE report_sequence = reports.sequence), impact),
               COALESCE((SELECT localized_report_suggested_action FROM task_proposals
                         WHERE report_sequence = reports.sequence), suggested_action),
-              discovered_during, status, created_at, updated_at
+               discovered_during, status, created_at, updated_at, source_name, source_installation_id,
+               reports.project_id
             FROM reports
             {BuildWhereClause(pageConditions)}
             ORDER BY sequence DESC
@@ -184,6 +186,57 @@ public sealed class ReportStore(BoyScoutDatabase database)
         }
 
         return projects;
+    }
+
+    public ProjectSummary CreateProject(string name, string path)
+    {
+        ValidateRequired(name, nameof(name));
+        var normalizedPath = ProjectPathNormalizer.Normalize(path);
+        if (!Directory.Exists(normalizedPath))
+        {
+            throw new ArgumentException("Project directory does not exist.", nameof(path));
+        }
+
+        var timestamp = UtcTimestamp();
+        using var connection = database.OpenConnection();
+        using var transaction = connection.BeginTransaction(deferred: false);
+        using (var existingCommand = connection.CreateCommand())
+        {
+            existingCommand.Transaction = transaction;
+            existingCommand.CommandText = "SELECT 1 FROM project_paths WHERE path = $path COLLATE NOCASE;";
+            existingCommand.Parameters.AddWithValue("$path", normalizedPath);
+            if (existingCommand.ExecuteScalar() is not null)
+            {
+                throw new InvalidOperationException("This path is already linked to a project.");
+            }
+        }
+
+        long projectId;
+        using (var projectCommand = connection.CreateCommand())
+        {
+            projectCommand.Transaction = transaction;
+            projectCommand.CommandText =
+                "INSERT INTO projects (name, created_at, updated_at) "
+                + "VALUES ($name, $timestamp, $timestamp) RETURNING id;";
+            projectCommand.Parameters.AddWithValue("$name", name.Trim());
+            projectCommand.Parameters.AddWithValue("$timestamp", timestamp);
+            projectId = Convert.ToInt64(projectCommand.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+
+        using (var pathCommand = connection.CreateCommand())
+        {
+            pathCommand.Transaction = transaction;
+            pathCommand.CommandText =
+                "INSERT INTO project_paths (project_id, path, is_primary, created_at) "
+                + "VALUES ($projectId, $path, 1, $timestamp);";
+            pathCommand.Parameters.AddWithValue("$projectId", projectId);
+            pathCommand.Parameters.AddWithValue("$path", normalizedPath);
+            pathCommand.Parameters.AddWithValue("$timestamp", timestamp);
+            pathCommand.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        return new ProjectSummary(projectId, name.Trim(), normalizedPath, 0, 0, null, false);
     }
 
     public bool? GetAiAccess(long projectId)
@@ -259,6 +312,7 @@ public sealed class ReportStore(BoyScoutDatabase database)
         using var connection = database.OpenConnection();
         using var transaction = connection.BeginTransaction(deferred: false);
         var projectId = GetOrCreateProject(connection, transaction, projectPath, timestamp);
+        var source = config?.LoadStatus();
 
         long sequence;
         using (var command = connection.CreateCommand())
@@ -268,10 +322,12 @@ public sealed class ReportStore(BoyScoutDatabase database)
                 """
                 INSERT INTO reports (
                   project, project_id, title, location, observation, impact,
-                  suggested_action, discovered_during, status, created_at, updated_at
+                  suggested_action, discovered_during, status, created_at, updated_at,
+                  source_name, source_installation_id
                 ) VALUES (
                   $project, $projectId, $title, $location, $observation, $impact,
-                  $suggestedAction, $discoveredDuring, 'open', $createdAt, $updatedAt
+                  $suggestedAction, $discoveredDuring, 'open', $createdAt, $updatedAt,
+                  $sourceName, $sourceInstallationId
                 )
                 RETURNING sequence;
                 """;
@@ -285,6 +341,8 @@ public sealed class ReportStore(BoyScoutDatabase database)
             command.Parameters.AddWithValue("$discoveredDuring", DbValue(request.DiscoveredDuring));
             command.Parameters.AddWithValue("$createdAt", timestamp);
             command.Parameters.AddWithValue("$updatedAt", timestamp);
+            command.Parameters.AddWithValue("$sourceName", DbValue(source?.DisplayName));
+            command.Parameters.AddWithValue("$sourceInstallationId", DbValue(source?.InstallationId.ToString("D")));
             sequence = Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
         }
 
@@ -338,7 +396,8 @@ public sealed class ReportStore(BoyScoutDatabase database)
                         WHERE report_sequence = reports.sequence), impact),
               COALESCE((SELECT localized_report_suggested_action FROM task_proposals
                         WHERE report_sequence = reports.sequence), suggested_action),
-              discovered_during, status, created_at, updated_at
+               discovered_during, status, created_at, updated_at, source_name, source_installation_id,
+               reports.project_id
             FROM reports
             {whereClause}
             ORDER BY sequence DESC
@@ -455,7 +514,8 @@ public sealed class ReportStore(BoyScoutDatabase database)
                         WHERE report_sequence = reports.sequence), impact),
               COALESCE((SELECT localized_report_suggested_action FROM task_proposals
                         WHERE report_sequence = reports.sequence), suggested_action),
-              discovered_during, status, created_at, updated_at
+               discovered_during, status, created_at, updated_at, source_name, source_installation_id,
+               reports.project_id
             FROM reports
             WHERE sequence = $sequence;
             """;
@@ -476,7 +536,10 @@ public sealed class ReportStore(BoyScoutDatabase database)
             NullableString(reader, 7),
             reader.GetString(8),
             reader.GetString(9),
-            reader.GetString(10));
+             reader.GetString(10),
+             NullableString(reader, 11),
+              reader.IsDBNull(12) ? null : Guid.Parse(reader.GetString(12)),
+              reader.IsDBNull(13) ? null : reader.GetInt64(13));
 
     private static string? NullableString(SqliteDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);

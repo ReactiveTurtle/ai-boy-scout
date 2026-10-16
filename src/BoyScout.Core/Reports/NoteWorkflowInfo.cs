@@ -10,4 +10,7 @@ public sealed record NoteWorkflowInfo(
     string? Reason,
     string? SubmittedRejectionReason,
     string? AgentVerification,
-    string UpdatedAt);
+    string UpdatedAt,
+    string? AgentCheckedAt = null,
+    string? HumanApprovedAt = null,
+    string? HumanRejectedAt = null);

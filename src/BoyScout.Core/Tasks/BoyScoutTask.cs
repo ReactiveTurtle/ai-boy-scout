@@ -9,4 +9,7 @@ public sealed record BoyScoutTask(
     string Status,
     string CreatedAt,
     string UpdatedAt,
-    IReadOnlyList<string> SourceReportIds);
+    IReadOnlyList<string> SourceReportIds,
+    string? ConfirmerName = null,
+    Guid? ConfirmerInstallationId = null,
+    string? CurrentConsequences = null);
