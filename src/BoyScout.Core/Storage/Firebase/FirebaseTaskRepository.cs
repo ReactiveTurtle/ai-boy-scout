@@ -20,6 +20,7 @@ public sealed record FirebaseTaskProposal(
 
 public sealed record FirebaseTaskPage(IReadOnlyList<BoyScoutTask> Items, string? NextCursor);
 public sealed record FirebaseTaskClaim(JsonObject Note, FirebaseTaskProposal Proposal, FirebaseProjectLeaseHandle Lease);
+public sealed record FirebaseTaskReprocessResult(JsonObject Note, FirebaseTaskProposal Proposal, string? DeletedTaskId);
 
 // Standalone workflow: neither task creation nor API integration happens without explicit confirmation.
 public sealed class FirebaseTaskRepository(FirebaseRealtimeDatabaseTransport transport)
@@ -253,6 +254,106 @@ public sealed class FirebaseTaskRepository(FirebaseRealtimeDatabaseTransport tra
     public Task<FirebaseTaskProposal> RestoreRejectedNoteAsync(string reportId, string comment,
         CancellationToken cancellationToken = default) =>
         RestoreRejectedAsync(reportId, comment, cancellationToken);
+
+    public async Task<FirebaseTaskReprocessResult> ReprocessCompletedNoteAsync(string reportId, string comment,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(transport);
+        var projectId = ParseProjectId(reportId);
+        Required(comment, nameof(comment));
+        var normalizedComment = comment.Trim();
+        if (normalizedComment.Length > MaxCommentLength)
+            throw new ArgumentException($"Comment must not exceed {MaxCommentLength} characters.", nameof(comment));
+
+        var path = ProjectPath(projectId);
+        for (var attempt = 0; attempt < MaxAttempts; attempt++)
+        {
+            var snapshot = await transport.GetAsync(path, cancellationToken);
+            var root = ReadProject(snapshot.Json, projectId);
+            var note = GetNote(root, reportId, projectId);
+            if ((string)note["Status"]! != ReportStatuses.Resolved)
+                throw new InvalidOperationException("Only a resolved note can be reprocessed.");
+
+            var proposals = GetCollection(root, "TaskProposals");
+            JsonNode? existingNode = null;
+            FirebaseTaskProposal? existing = null;
+            if (proposals.TryGetPropertyValue(reportId, out existingNode))
+            {
+                existing = ReadProposal(existingNode, reportId, projectId);
+                if (existing.State != TaskProposalStates.Confirmed)
+                    throw new InvalidOperationException("A resolved note can only be reprocessed without a proposal or with a confirmed proposal.");
+            }
+
+            var tasks = GetCollection(root, "Tasks");
+            var linkedTasks = new List<(string Id, BoyScoutTask Task)>();
+            foreach (var entry in tasks)
+            {
+                if (entry.Value is not JsonObject taskNode || !HasText(taskNode, "Id", entry.Key) ||
+                    !HasLong(taskNode, "ProjectId", projectId) || !HasText(taskNode, "Title") ||
+                    !HasText(taskNode, "Description") || !HasText(taskNode, "AcceptanceCriteria") ||
+                    !HasText(taskNode, "Status") || !TaskStatuses.IsValid((string)taskNode["Status"]!) ||
+                    !HasText(taskNode, "CreatedAt") || !HasText(taskNode, "UpdatedAt") ||
+                    taskNode["SourceReportIds"] is not JsonArray sources || sources.Count == 0)
+                    throw InvalidData();
+                BoyScoutTask task;
+                try { task = taskNode.Deserialize<BoyScoutTask>() ?? throw InvalidData(); }
+                catch (JsonException) { throw InvalidData(); }
+                try
+                {
+                    if (!entry.Key.StartsWith("BST-", StringComparison.Ordinal) ||
+                        ParseProjectId(entry.Key[4..]) != projectId || task.SourceReportIds is null ||
+                        task.SourceReportIds.Any(source => ParseProjectId(source) != projectId)) throw InvalidData();
+                }
+                catch (ArgumentException) { throw InvalidData(); }
+                if (task.SourceReportIds.Contains(reportId)) linkedTasks.Add((entry.Key, task));
+            }
+
+            if (linkedTasks.Count > 1)
+                throw new InvalidOperationException("A resolved note with multiple linked tasks cannot be reprocessed.");
+            var linkedTask = linkedTasks.SingleOrDefault();
+            if (linkedTasks.Count == 1 && linkedTask.Task.SourceReportIds.Count != 1)
+                throw new InvalidOperationException("A task shared by multiple notes cannot be deleted for reprocessing.");
+
+            var timestamp = Timestamp();
+            JsonObject proposal;
+            if (existing is null)
+            {
+                proposal = JsonSerializer.SerializeToNode(new FirebaseTaskProposal(reportId, projectId,
+                    TaskProposalStates.Queued, null, null, null, null, null, null, timestamp, timestamp,
+                    ReviewIntent: TaskProposalReviewIntents.Proposal, RequestedClarification: normalizedComment))!.AsObject();
+            }
+            else
+            {
+                proposal = ((JsonObject)existingNode!).DeepClone().AsObject();
+                ResetProposalOutputs(proposal);
+                foreach (var field in new[] { "LocalizedReportTitle", "LocalizedReportObservation", "LocalizedReportImpact", "LocalizedReportSuggestedAction" })
+                    proposal[field] = null;
+                proposal["State"] = TaskProposalStates.Queued;
+                proposal["UpdatedAt"] = timestamp;
+                proposal["ReviewIntent"] = TaskProposalReviewIntents.Proposal;
+                proposal["RequestedRejectionReason"] = null;
+                proposal["RequestedClarification"] = normalizedComment;
+            }
+
+            note["Status"] = ReportStatuses.Open;
+            note["UpdatedAt"] = timestamp;
+            FirebaseProjectLease.Invalidate(root, reportId, FirebaseProjectLease.ServerTime(snapshot));
+            proposals[reportId] = proposal;
+            root["TaskProposals"] = proposals;
+            string? deletedTaskId = null;
+            if (linkedTasks.Count == 1)
+            {
+                deletedTaskId = linkedTask.Id;
+                tasks.Remove(linkedTask.Id);
+                root["Tasks"] = tasks;
+            }
+
+            if (await transport.PutIfMatchAsync(path, root.ToJsonString(), snapshot.ETag, cancellationToken))
+                return new FirebaseTaskReprocessResult((JsonObject)note.DeepClone(),
+                    ReadProposal(proposal, reportId, projectId), deletedTaskId);
+        }
+        throw new InvalidOperationException("Project remained contended; note was not reprocessed.");
+    }
 
     private async Task<FirebaseTaskProposal> RequeueReviewProposalAsync(string reportId, string comment,
         bool clarification, CancellationToken cancellationToken, bool rejectionReview = false)

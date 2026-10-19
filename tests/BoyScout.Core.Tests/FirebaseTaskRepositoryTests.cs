@@ -358,6 +358,179 @@ public sealed class FirebaseTaskRepositoryTests
     }
 
     [Fact]
+    public async Task Reprocess_without_proposal_queues_note_and_preserves_unrelated_data()
+    {
+        using var server = new Server();
+        SetUnrelatedValidTask(server);
+        var root = server.Root;
+        root["Notes"]![Id]!["Status"] = "resolved";
+        server.Root = root;
+        var worker = await Acquire(server);
+
+        var result = await Repository(server).ReprocessCompletedNoteAsync(Id, "  inspect again  ", TestContext.Current.CancellationToken);
+
+        Assert.Equal("open", result.Note["Status"]!.GetValue<string>());
+        Assert.Equal(result.Note["UpdatedAt"]!.GetValue<string>(), result.Proposal.UpdatedAt);
+        Assert.Equal("queued", result.Proposal.State);
+        Assert.Equal("proposal", result.Proposal.ReviewIntent);
+        Assert.Equal("inspect again", result.Proposal.RequestedClarification);
+        Assert.Equal(0, result.Proposal.Attempts);
+        Assert.Equal(result.Proposal.CreatedAt, result.Proposal.UpdatedAt);
+        Assert.Null(result.DeletedTaskId);
+        Assert.Null(await Lease(server).RenewAsync(worker, TestContext.Current.CancellationToken));
+        Assert.Equal("meta", server.Root["Metadata"]!["Custom"]!.GetValue<string>());
+        Assert.Equal("note-extra", server.Root["Notes"]![Id]!["Extra"]!.GetValue<string>());
+        Assert.Equal("keep", server.Root["Tasks"]!["BST-BSR-1-0000000000000000002"]!["Extra"]!.GetValue<string>());
+        Assert.Equal(2, server.Writes);
+    }
+
+    [Fact]
+    public async Task Reprocess_deletes_only_exclusive_task_and_resets_confirmed_proposal_in_one_cas()
+    {
+        using var server = new Server();
+        SetUnrelatedValidTask(server);
+        var repo = Repository(server);
+        SetReadyProposal(server, "ready");
+        await repo.ConfirmProposalAsync(Id, Installation, "name", TestContext.Current.CancellationToken);
+        var lease = await Acquire(server);
+        var root = server.Root;
+        root["TaskProposals"]![Id]!["Attempts"] = 4;
+        root["TaskProposals"]![Id]!["LocalizedReportTitle"] = "old localized title";
+        root["TaskProposals"]![Id]!["RequestedClarification"] = "old clarification";
+        root["TaskProposals"]![Id]!["Extra"] = "preserve";
+        root["Tasks"]!["BST-" + Id]!["Extra"] = "task-extra";
+        server.Root = root;
+        server.ConflictNext = true;
+        var writes = server.Writes;
+
+        var result = await repo.ReprocessCompletedNoteAsync(Id, "  revisit  ", TestContext.Current.CancellationToken);
+
+        Assert.Equal("BST-" + Id, result.DeletedTaskId);
+        Assert.Null(server.Root["Tasks"]!["BST-" + Id]);
+        Assert.Equal("open", result.Note["Status"]!.GetValue<string>());
+        Assert.Equal(result.Note["UpdatedAt"]!.GetValue<string>(), result.Proposal.UpdatedAt);
+        Assert.Equal(4, result.Proposal.Attempts);
+        Assert.Equal("2025-01-01T00:00:00.000Z", result.Proposal.CreatedAt);
+        Assert.Equal("revisit", result.Proposal.RequestedClarification);
+        Assert.Equal("proposal", result.Proposal.ReviewIntent);
+        Assert.Null(result.Proposal.Title);
+        Assert.Null(result.Proposal.Description);
+        Assert.Null(result.Proposal.AcceptanceCriteria);
+        Assert.Null(result.Proposal.VerificationSummary);
+        Assert.Null(result.Proposal.Relevance);
+        Assert.Null(result.Proposal.RecommendedAction);
+        Assert.Null(result.Proposal.CurrentConsequences);
+        Assert.Null(result.Proposal.FinalRejectionReason);
+        Assert.Null(result.Proposal.Error);
+        Assert.Null(result.Proposal.LocalizedReportTitle);
+        Assert.Null(result.Proposal.LocalizedReportObservation);
+        Assert.Null(result.Proposal.LocalizedReportImpact);
+        Assert.Null(result.Proposal.LocalizedReportSuggestedAction);
+        Assert.Null(result.Proposal.AgentCheckedAt);
+        Assert.Null(result.Proposal.HumanApprovedAt);
+        Assert.Null(result.Proposal.HumanRejectedAt);
+        Assert.Equal("preserve", server.Root["TaskProposals"]![Id]!["Extra"]!.GetValue<string>());
+        Assert.Null(await Lease(server).RenewAsync(lease, TestContext.Current.CancellationToken));
+        Assert.Equal("keep", server.Root["Tasks"]!["BST-BSR-1-0000000000000000002"]!["Extra"]!.GetValue<string>());
+        Assert.Equal(writes + 2, server.Writes);
+    }
+
+    [Fact]
+    public async Task Reprocess_refuses_multiple_or_shared_linked_tasks_without_writing()
+    {
+        foreach (var shared in new[] { false, true })
+        {
+            using var server = new Server();
+            SetUnrelatedValidTask(server);
+            var repo = Repository(server);
+            SetReadyProposal(server, "ready");
+            await repo.ConfirmProposalAsync(Id, Installation, "name", TestContext.Current.CancellationToken);
+            var root = server.Root;
+            if (shared)
+                root["Tasks"]!["BST-" + Id]!["SourceReportIds"] = new JsonArray(Id, "BSR-1-0000000000000000002");
+            else
+            {
+                var duplicate = root["Tasks"]!["BST-" + Id]!.DeepClone().AsObject();
+                duplicate["Id"] = "BST-BSR-1-0000000000000000002";
+                root["Tasks"]!["BST-BSR-1-0000000000000000002"] = duplicate;
+            }
+            server.Root = root;
+            var before = server.Root.ToJsonString();
+            var writes = server.Writes;
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => repo.ReprocessCompletedNoteAsync(Id, "revisit",
+                TestContext.Current.CancellationToken));
+
+            Assert.Equal(writes, server.Writes);
+            Assert.Equal(before, server.Root.ToJsonString());
+        }
+    }
+
+    [Fact]
+    public async Task Reprocess_validates_comment_and_requires_resolved_note_and_confirmed_or_absent_proposal()
+    {
+        foreach (var comment in new[] { " ", new string('x', 2_001) })
+        {
+            using var server = new Server();
+            var writes = server.Writes;
+            await Assert.ThrowsAsync<ArgumentException>(() => Repository(server).ReprocessCompletedNoteAsync(Id,
+                comment, TestContext.Current.CancellationToken));
+            Assert.Equal(writes, server.Writes);
+        }
+
+        foreach (var state in new[] { "open", "dismissed", "queued", "processing", "ready", "failed", "rejected", "unverified" })
+        {
+            using var server = new Server();
+            var root = server.Root;
+            root["Notes"]![Id]!["Status"] = "resolved";
+            root["TaskProposals"] = new JsonObject
+            {
+                [Id] = JsonNode.Parse("""
+                    {"ReportId":"BSR-1-0000000000000000001","ProjectId":1,"State":"confirmed",
+                     "Relevance":"current","RecommendedAction":"create_task","Title":"T",
+                     "Description":"D","AcceptanceCriteria":"A","CreatedAt":"created","UpdatedAt":"updated"}
+                    """)
+            };
+            if (state is "open" or "dismissed") root["Notes"]![Id]!["Status"] = state;
+            else root["TaskProposals"]![Id]!["State"] = state;
+            if (state is "queued" or "processing" or "failed" or "unverified")
+            {
+                root["TaskProposals"]![Id]!["Relevance"] = null;
+                root["TaskProposals"]![Id]!["RecommendedAction"] = null;
+                root["TaskProposals"]![Id]!["Title"] = null;
+                root["TaskProposals"]![Id]!["Description"] = null;
+                root["TaskProposals"]![Id]!["AcceptanceCriteria"] = null;
+                if (state is "queued" or "processing") root["TaskProposals"]![Id]!["Error"] = null;
+                if (state == "failed") root["TaskProposals"]![Id]!["Error"] = "error";
+                if (state == "unverified") root["TaskProposals"]![Id]!["VerificationSummary"] = "summary";
+            }
+            server.Root = root;
+            var writes = server.Writes;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Repository(server).ReprocessCompletedNoteAsync(Id,
+                "revisit", TestContext.Current.CancellationToken));
+            Assert.Equal(writes, server.Writes);
+        }
+    }
+
+    [Fact]
+    public async Task Reprocess_fails_closed_on_malformed_task_or_proposal()
+    {
+        foreach (var malformed in new[] { "task", "proposal" })
+        {
+            using var server = new Server();
+            var root = server.Root;
+            root["Notes"]![Id]!["Status"] = "resolved";
+            if (malformed == "task") root["Tasks"]!["BST-bad"] = new JsonObject { ["SourceReportIds"] = new JsonArray(Id) };
+            else root["TaskProposals"] = new JsonObject { [Id] = new JsonObject { ["State"] = "confirmed" } };
+            server.Root = root;
+            var writes = server.Writes;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Repository(server).ReprocessCompletedNoteAsync(Id,
+                "revisit", TestContext.Current.CancellationToken));
+            Assert.Equal(writes, server.Writes);
+        }
+    }
+
+    [Fact]
     public async Task New_transitions_reject_invalid_comments_states_and_note_statuses_without_writes()
     {
         foreach (var comment in new[] { " ", new string('x', 2_001) })
@@ -844,6 +1017,22 @@ public sealed class FirebaseTaskRepositoryTests
     }
 
     private static ProjectBinding Binding(string path) => new(1, path, true);
+
+    private static void SetUnrelatedValidTask(Server server)
+    {
+        var root = server.Root;
+        root["Tasks"] = new JsonObject
+        {
+            ["BST-BSR-1-0000000000000000002"] = new JsonObject
+            {
+                ["Id"] = "BST-BSR-1-0000000000000000002", ["ProjectId"] = 1,
+                ["Title"] = "Other", ["Description"] = "Other task", ["AcceptanceCriteria"] = "Criteria",
+                ["Status"] = "todo", ["CreatedAt"] = "created", ["UpdatedAt"] = "updated",
+                ["SourceReportIds"] = new JsonArray("BSR-1-0000000000000000002"), ["Extra"] = "keep"
+            }
+        };
+        server.Root = root;
+    }
 
     private static TempDirectory BoundDirectory(Server server)
     {
