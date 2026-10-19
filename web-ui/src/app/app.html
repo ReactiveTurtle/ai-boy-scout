@@ -1,12 +1,16 @@
 <div class="page">
-  <div class="app-window" [class.focus-mode]="focusMode()" [class.nav-collapsed]="sidebarCollapsed()" [class.settings-mode]="workspace() === 'storage'">
+  <div class="app-window" [class.focus-mode]="focusMode()" [class.nav-collapsed]="sidebarCollapsed()" [class.settings-mode]="workspace() === 'storage'" [class.projects-mode]="workspace() === 'projects'">
     <header class="app-header">
-      @if (workspace() !== 'storage') { <button class="menu-button" type="button" aria-label="Скрыть или показать проекты" (click)="sidebarCollapsed.set(!sidebarCollapsed())">☰</button> }
+      @if (workspace() === 'notes' || workspace() === 'tasks') { <button class="menu-button" type="button" aria-label="Скрыть или показать навигацию" (click)="sidebarCollapsed.set(!sidebarCollapsed())">☰</button> }
       <a class="brand" href="/" aria-label="Boy Scout">boy.<strong>scout</strong></a>
+      @if (workspace() === 'notes' || workspace() === 'tasks') {
+        <button class="project-switch-button" type="button" (click)="exitProject()">← Проекты</button>
+        <span class="current-project-name">{{ selectedProject()?.name ?? 'Все проекты' }}</span>
+      }
       <div class="header-spacer"></div>
       <div class="sync-state"><i></i><span>{{ storageStatus()?.backend === 1 ? 'Firebase' : 'Локальная база' }}</span></div>
       <a class="header-settings" href="/settings/storage" aria-label="Настройки BoyScout" [attr.aria-current]="workspace() === 'storage' ? 'page' : null"><span>Настройки BoyScout</span></a>
-      @if (workspace() !== 'storage') {
+      @if (workspace() === 'notes' || workspace() === 'tasks') {
       <button
         class="automation-toggle"
         [class.running]="automation()?.enabled"
@@ -21,9 +25,10 @@
     </header>
 
     <div class="app-layout">
-      @if (workspace() !== 'storage') {
+      @if (workspace() === 'notes' || workspace() === 'tasks') {
       <aside class="sidebar">
         <nav class="main-nav" aria-label="Основная навигация">
+          <button type="button" (click)="exitProject()"><span class="nav-icon">⌂</span><span>Список проектов</span></button>
           <button type="button" [class.active]="workspace() === 'notes'" (click)="switchWorkspace('notes')">
             <span class="nav-icon">◇</span><span>Заметки</span><b>{{ allNoteCount() }}</b>
           </button>
@@ -32,37 +37,7 @@
           </button>
         </nav>
 
-        <div class="sidebar-section">
-          <div class="sidebar-title"><span>Проекты</span><b>{{ projects().length }}</b><button type="button" aria-label="Добавить проект" (click)="projectFormOpen.set(!projectFormOpen())">+</button></div>
-          @if (projectFormOpen()) {
-            <form class="project-form" (submit)="$event.preventDefault(); createProject()">
-              <label>Название <input type="text" required [value]="newProjectName()" (input)="newProjectName.set($any($event.target).value)" /></label>
-              <label>Путь на этом компьютере <input type="text" required [value]="newProjectPath()" (input)="newProjectPath.set($any($event.target).value)" /></label>
-              <button type="submit" [disabled]="actionPending() || !newProjectName().trim() || !newProjectPath().trim()">Создать локальный проект</button>
-            </form>
-          }
-          <label class="project-search"><span>⌕</span><input type="search" placeholder="Найти проект" [value]="projectSearchText()" (input)="updateProjectSearch($event)" /></label>
-          <div class="project-list">
-            <button class="project-link" [class.active]="selectedProjectId() === null" type="button" (click)="selectProject(null)">
-              <span class="folder">⌂</span><span>Все проекты</span><b>{{ allNoteCount() }}</b>
-            </button>
-            @for (project of primaryProjects(); track project.id) {
-              <button class="project-link" [class.active]="selectedProjectId() === project.id" [title]="project.primaryPath" type="button" (click)="selectProject(project.id)">
-                <span class="folder" [class.access-granted]="project.aiAccessGranted">{{ project.aiAccessGranted ? '●' : '□' }}</span><span>{{ projectDisplayName(project) }}</span><b>{{ project.reportCount }}</b>
-              </button>
-            }
-            @if (otherProjects().length > 0) {
-              <button class="other-toggle" type="button" (click)="showOtherProjects.set(!showOtherProjects())"><span>{{ showOtherProjects() ? '⌄' : '›' }}</span> Остальные <b>{{ otherProjects().length }}</b></button>
-              @if (showOtherProjects() || projectSearchText()) {
-                @for (project of otherProjects(); track project.id) {
-                  <button class="project-link secondary-project" [class.active]="selectedProjectId() === project.id" [title]="project.primaryPath" type="button" (click)="selectProject(project.id)">
-                    <span class="folder" [class.access-granted]="project.aiAccessGranted">{{ project.aiAccessGranted ? '●' : '□' }}</span><span>{{ projectDisplayName(project) }}</span><b>{{ project.reportCount }}</b>
-                  </button>
-                }
-              }
-            }
-          </div>
-        </div>
+        <div class="sidebar-current-project"><small>Открытый проект</small><strong>{{ selectedProject()?.name ?? 'Все проекты' }}</strong>@if (selectedProject()) { <code>{{ selectedProject()!.primaryPath }}</code> }</div>
 
         <div class="sidebar-ai" [attr.data-state]="selectedProject() && !selectedProject()!.aiAccessGranted ? 'idle' : proposal()?.state ?? 'idle'">
           <div><i></i><span>OpenCode</span></div>
@@ -80,7 +55,47 @@
       }
 
       <main class="content">
-        @if (workspace() === 'storage') {
+        @if (workspace() === 'projects') {
+          <section class="storage-page project-landing">
+            <header class="storage-hero project-landing-head">
+              <span>BOY SCOUT / PROJECTS</span>
+              <h1>Выберите проект</h1>
+              <p>Каждый проект открывается в собственном workspace: заметки, задачи и настройки хранилища относятся только к нему.</p>
+              <div class="project-landing-tools">
+                <label class="project-search"><span>⌕</span><input type="search" placeholder="Найти проект по имени или пути" [value]="projectSearchText()" (input)="updateProjectSearch($event)" /></label>
+                <button type="button" (click)="projectFormOpen.set(!projectFormOpen())">{{ projectFormOpen() ? 'Отмена' : '+ Новый проект' }}</button>
+              </div>
+              @if (projectFormOpen()) {
+                <form class="project-form project-landing-form storage-card" (submit)="$event.preventDefault(); createProject()">
+                  <label>Название <input type="text" required [value]="newProjectName()" (input)="newProjectName.set($any($event.target).value)" /></label>
+                  <label>Путь к существующему каталогу <input type="text" required [value]="newProjectPath()" (input)="newProjectPath.set($any($event.target).value)" /></label>
+                  <button type="submit" [disabled]="actionPending() || !newProjectName().trim() || !newProjectPath().trim()">Создать локальный проект и войти</button>
+                </form>
+              }
+            </header>
+            <div class="project-landing-grid">
+              @if (visibleProjects().length === 0) { <div class="empty-state project-landing-empty"><h2>Проектов пока нет</h2><p>Создайте проект из существующего каталога, чтобы начать собирать заметки.</p></div> }
+              @for (project of visibleProjects(); track project.id) {
+                <button class="storage-card project-card" type="button" (click)="enterProject(project.id)">
+                  <span class="project-card-mark" [class.access-granted]="project.aiAccessGranted">{{ project.aiAccessGranted ? '●' : '□' }}</span>
+                  <strong>{{ project.name }}</strong>
+                  <code>{{ project.primaryPath }}</code>
+                  <span>{{ project.reportCount }} заметок · {{ project.openCount }} открыто</span>
+                  <small>{{ project.aiAccessGranted ? 'AI-доступ разрешён' : 'AI-доступ не разрешён' }}</small>
+                  <b>Войти в проект →</b>
+                </button>
+              }
+              @if (!projectSearchText()) {
+                <button class="storage-card project-card all-projects-card" type="button" (click)="enterProject(null)">
+                  <span class="project-card-mark">⌂</span>
+                  <strong>Все проекты</strong>
+                  <span>{{ allNoteCount() }} заметок во всех локальных проектах</span>
+                  <b>Открыть общий workspace →</b>
+                </button>
+              }
+            </div>
+          </section>
+        } @else if (workspace() === 'storage') {
           <div class="storage-page">
             <nav class="storage-breadcrumb" aria-label="Навигация"><a href="/">Рабочий стол</a><span>/</span><span>Настройки</span></nav>
             <header class="storage-hero"><span>BOY SCOUT / CONFIGURATION</span><h1>Хранилище и имя</h1><p>Настройки этой установки. Проекты, AI-доступ и выбор хранилища новых записей управляются отдельно в настройках каждого проекта.</p></header>

@@ -29,6 +29,8 @@ npm run start:ui
 
 Open `http://127.0.0.1:5187`. The site and API bind to loopback only. Keep the source checkout in a stable local path: the published app uses that checkout as its content root, and the per-repository MCP setup refers to the published MCP DLL by absolute path.
 
+The site opens to the Projects chooser. Enter a project to work with its own Notes, Tasks and storage settings; use the **Projects** action to return to the chooser. Repository shortcuts with `projectPath` open the matching project directly.
+
 ### Install MCP in a project repository
 
 1. Publish the MCP from the Boy Scout checkout with `npm run publish:mcp`.

@@ -233,7 +233,17 @@ interface TaskPage {
   nextBefore: number | null;
 }
 
-type Workspace = 'notes' | 'tasks' | 'storage';
+type Workspace = 'projects' | 'notes' | 'tasks' | 'storage';
+
+const initialLocation = new URL(window.location.href);
+const requestedProjectId = Number(initialLocation.searchParams.get('projectId'));
+const initialProjectId = Number.isInteger(requestedProjectId) && requestedProjectId > 0 ? requestedProjectId : null;
+const requestedProjectWorkspace = initialLocation.searchParams.get('workspace') === 'tasks' ? 'tasks' : 'notes';
+const initialWorkspace: Workspace = initialLocation.pathname.replace(/\/$/, '') === '/settings/storage'
+  ? 'storage'
+  : initialProjectId !== null || initialLocation.searchParams.has('projectPath') || initialLocation.searchParams.get('all') === '1'
+    ? requestedProjectWorkspace
+    : 'projects';
 
 const noteStatusOptions = [
   { value: '', label: 'Все' },
@@ -280,8 +290,8 @@ export class App {
   protected readonly selectedWorkflow = signal<NoteWorkflowInfo | null>(null);
   protected readonly selectedTask = signal<WorkTask | null>(null);
   protected readonly taskSourceNames = signal<string[]>([]);
-  protected readonly selectedProjectId = signal<number | null>(null);
-  protected readonly workspace = signal<Workspace>(window.location.pathname.replace(/\/$/, '') === '/settings/storage' ? 'storage' : 'notes');
+  protected readonly selectedProjectId = signal<number | null>(initialProjectId);
+  protected readonly workspace = signal<Workspace>(initialWorkspace);
   protected readonly selectedNoteStatus = signal('');
   protected readonly selectedTaskStatus = signal('');
   protected readonly searchText = signal('');
@@ -323,7 +333,6 @@ export class App {
   protected readonly remotePaths = signal<Record<number, string>>({});
   protected readonly previewProjectId = signal<number | null>(null);
   protected readonly transferPreview = signal<TransferPreview | null>(null);
-  protected readonly showOtherProjects = signal(false);
   protected readonly focusMode = signal(false);
   protected readonly sidebarCollapsed = signal(false);
   protected readonly verificationExpanded = signal(false);
@@ -356,12 +365,7 @@ export class App {
   protected readonly selectedProject = computed(() =>
     this.projects().find((project) => project.id === this.selectedProjectId()) ?? null,
   );
-  protected readonly primaryProjects = computed(() =>
-    this.filteredProjects().filter((project) => project.reportCount > 1),
-  );
-  protected readonly otherProjects = computed(() =>
-    this.filteredProjects().filter((project) => project.reportCount <= 1),
-  );
+  protected readonly visibleProjects = computed(() => this.filteredProjects());
 
   constructor() {
     this.searchChanges
@@ -369,7 +373,7 @@ export class App {
       .subscribe(() => {
         if (this.workspace() === 'notes') {
           this.loadNotes(true);
-        } else {
+        } else if (this.workspace() === 'tasks') {
           this.loadTasks();
         }
       });
@@ -377,7 +381,7 @@ export class App {
     timer(0, 4_000)
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe(() => {
-        if (this.workspace() === 'storage') return;
+        if (this.workspace() !== 'notes' && this.workspace() !== 'tasks') return;
         this.loadProposal();
         this.loadAutomation();
         this.loadVisibleWorkflows();
@@ -386,8 +390,10 @@ export class App {
 
     if (this.workspace() !== 'storage') {
       this.loadProjects();
-      this.loadNotes(true);
-      this.loadTasks();
+    }
+    if (this.workspace() === 'notes' || this.workspace() === 'tasks') {
+      if (this.workspace() === 'notes') this.loadNotes(true);
+      else this.loadTasks();
       this.loadNoteCounts();
     }
     this.loadStorageStatus();
@@ -835,6 +841,24 @@ export class App {
     this.workspace.set(workspace);
     this.searchText.set('');
     this.notice.set(null);
+    this.updateProjectAddress(this.selectedProjectId(), workspace, this.selectedProjectId() === null);
+    if (workspace === 'notes') {
+      this.loadNotes(true);
+    } else {
+      this.loadTasks();
+    }
+  }
+
+  protected enterProject(projectId: number | null, workspace: 'notes' | 'tasks' = 'notes'): void {
+    this.selectedProjectId.set(projectId);
+    this.workspace.set(workspace);
+    this.projectSettingsOpen.set(false);
+    this.setupOpen.set(false);
+    this.searchText.set('');
+    this.selectedNoteStatus.set('');
+    this.selectedTaskStatus.set('');
+    this.updateProjectAddress(projectId, workspace, projectId === null);
+    this.loadNoteCounts();
     if (workspace === 'notes') {
       this.loadNotes(true);
     } else {
@@ -843,18 +867,33 @@ export class App {
   }
 
   protected selectProject(projectId: number | null): void {
-    if (this.selectedProjectId() === projectId) {
-      return;
-    }
+    this.enterProject(projectId);
+  }
 
-    this.selectedProjectId.set(projectId);
+  protected exitProject(): void {
+    this.selectedProjectId.set(null);
+    this.workspace.set('projects');
     this.projectSettingsOpen.set(false);
-    this.loadNoteCounts();
-    if (this.workspace() === 'notes') {
-      this.loadNotes(true);
-    } else {
-      this.loadTasks();
+    this.setupOpen.set(false);
+    this.searchText.set('');
+    this.updateProjectAddress(null, 'notes', false);
+  }
+
+  private updateProjectAddress(projectId: number | null, workspace: 'notes' | 'tasks', allProjects: boolean): void {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('projectPath');
+    url.searchParams.delete('projectId');
+    url.searchParams.delete('all');
+    if (projectId === null && allProjects) {
+      url.searchParams.set('all', '1');
+    } else if (projectId !== null) {
+      url.searchParams.set('projectId', projectId.toString());
+      const path = this.projects().find((project) => project.id === projectId)?.primaryPath;
+      if (path) url.searchParams.set('projectPath', path);
     }
+    if (projectId !== null || allProjects) url.searchParams.set('workspace', workspace);
+    else url.searchParams.delete('workspace');
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
   }
 
   protected selectNoteStatus(status: string): void {
@@ -1436,12 +1475,21 @@ export class App {
       .subscribe({
         next: (projects) => {
           this.projects.set(projects);
-          const path = new URLSearchParams(window.location.search).get('projectPath');
-          if (path && !this.shortcutHandled) {
+          const params = new URLSearchParams(window.location.search);
+          const path = params.get('projectPath');
+          const projectId = Number(params.get('projectId')) || null;
+          if ((path || projectId !== null) && !this.shortcutHandled) {
             this.shortcutHandled = true;
-            const match = projects.find((project) => project.primaryPath.toLocaleLowerCase() === path.toLocaleLowerCase());
-            if (match) this.selectProject(match.id);
-            else this.notice.set('Репозиторий из ярлыка ещё не добавлен в проекты сайта. Добавьте его через +.');
+            const match = projectId !== null
+              ? projects.find((project) => project.id === projectId)
+              : projects.find((project) => project.primaryPath.toLocaleLowerCase() === path!.toLocaleLowerCase());
+            if (match) this.enterProject(match.id, params.get('workspace') === 'tasks' ? 'tasks' : 'notes');
+            else {
+              this.selectedProjectId.set(null);
+              this.workspace.set('projects');
+              this.updateProjectAddress(null, 'notes', false);
+              this.notice.set('Проект из ссылки ещё не добавлен в Boy Scout. Добавьте его из списка проектов.');
+            }
           }
         },
         error: (error: HttpErrorResponse) => this.setError(error),

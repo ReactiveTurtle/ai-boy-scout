@@ -86,4 +86,5 @@ operations and merged pagination are implemented together.
 - ITR-035: preflight a bound Firebase project and enable only new-note writes after an explicit confirmation token.
 - ITR-036: present activation preflight as a multi-stage project-settings flow with explicit final confirmation.
 - ITR-037: verify Firebase write access with an ETag-protected no-change write and require success before activation.
+- ITR-038: make project selection the top-level screen and enter project-scoped Notes/Tasks/settings after selection.
 - next: verify the activation wizard against a live Firebase project and confirm the main list behavior for Firebase/SQLite records.
