@@ -71,5 +71,7 @@ operations and merged pagination are implemented together.
   separate from the existing SQLite history while mixed paging is not yet implemented.
 - ITR-025: let a reviewer retry or clarify an active Firebase proposal with a required comment,
   atomically clearing the old result and returning it to the remote queue.
-- next: support Firebase rejection-review requests, processing requeue, and restore; invalidate
+- ITR-026: support Firebase rejection-review requests, processing requeue, and restore; invalidate
   leases atomically when canceling in-flight work.
+- next: implement confirmed-note reprocess with safe deletion of only an exclusive remote task,
+  then expose these transitions in the API/UI.

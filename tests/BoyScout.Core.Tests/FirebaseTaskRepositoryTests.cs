@@ -259,6 +259,135 @@ public sealed class FirebaseTaskRepositoryTests
     }
 
     [Fact]
+    public async Task Request_rejection_review_creates_or_resets_proposal_and_retries_cas()
+    {
+        using var createdServer = new Server();
+        var created = Repository(createdServer);
+        createdServer.ConflictNext = true;
+        var fresh = await created.RequestRejectionReviewAsync(Id, "  obsolete reason  ", TestContext.Current.CancellationToken);
+        Assert.Equal("queued", fresh.State);
+        Assert.Equal("rejection", fresh.ReviewIntent);
+        Assert.Equal("obsolete reason", fresh.RequestedRejectionReason);
+        Assert.Equal(1, fresh.Attempts);
+        Assert.Equal(fresh.CreatedAt, fresh.UpdatedAt);
+        Assert.Equal(2, createdServer.Writes);
+
+        using var existingServer = new Server();
+        var repo = Repository(existingServer);
+        SetReadyProposal(existingServer, "unverified");
+        var root = existingServer.Root;
+        root["TaskProposals"]![Id]!["LocalizedReportTitle"] = "localized";
+        root["TaskProposals"]![Id]!["Extra"] = "unknown";
+        root["TaskProposals"]![Id]!["RequestedClarification"] = "old request";
+        existingServer.Root = root;
+        var result = await repo.RequestRejectionReviewAsync(Id, "new reason", TestContext.Current.CancellationToken);
+
+        Assert.Equal("rejection", result.ReviewIntent);
+        Assert.Equal("new reason", result.RequestedRejectionReason);
+        Assert.Null(result.RequestedClarification);
+        Assert.Equal(2, result.Attempts);
+        Assert.Equal("2025-01-01T00:00:00.000Z", result.CreatedAt);
+        Assert.Equal("localized", result.LocalizedReportTitle);
+        Assert.Equal("unknown", existingServer.Root["TaskProposals"]![Id]!["Extra"]!.GetValue<string>());
+        Assert.Null(result.VerificationSummary);
+        Assert.Null(result.AgentCheckedAt);
+        Assert.Null(result.HumanRejectedAt);
+    }
+
+    [Fact]
+    public async Task Processing_requeue_is_atomic_preserves_attempts_and_invalidates_worker()
+    {
+        using var server = new Server();
+        var repo = Repository(server);
+        var worker = await Acquire(server);
+        SetProcessingProposal(server);
+        var before = server.Root;
+        before["TaskProposals"]![Id]!["Attempts"] = 4;
+        before["TaskProposals"]![Id]!["RequestedRejectionReason"] = "old reason";
+        before["TaskProposals"]![Id]!["AgentCheckedAt"] = "agent";
+        before["TaskProposals"]![Id]!["HumanRejectedAt"] = "human";
+        server.Root = before;
+        server.ConflictNext = true;
+
+        var queued = await repo.RequeueProcessingProposalAsync(Id, "  check again  ", TestContext.Current.CancellationToken);
+
+        Assert.Equal("queued", queued.State);
+        Assert.Equal("proposal", queued.ReviewIntent);
+        Assert.Equal("check again", queued.RequestedClarification);
+        Assert.Null(queued.RequestedRejectionReason);
+        Assert.Equal(4, queued.Attempts);
+        Assert.Equal("2025-01-01T00:00:00.000Z", queued.CreatedAt);
+        Assert.Equal("open", server.Root["Notes"]![Id]!["Status"]!.GetValue<string>());
+        Assert.Equal(3, server.Writes);
+        Assert.Null(await Lease(server).RenewAsync(worker, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => repo.FailProposalAsync(worker, Id, "stale", TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Restore_rejected_note_atomically_queues_with_or_without_rejected_proposal()
+    {
+        foreach (var hasProposal in new[] { false, true })
+        {
+            using var server = new Server();
+            var repo = Repository(server);
+            var worker = await Acquire(server);
+            var root = server.Root;
+            root["Notes"]![Id]!["Status"] = "dismissed";
+            root["Notes"]![Id]!["UpdatedAt"] = "before";
+            if (hasProposal)
+            {
+                SetReadyProposal(server, "rejected");
+                root = server.Root;
+                root["Notes"]![Id]!["Status"] = "dismissed";
+                root["Notes"]![Id]!["UpdatedAt"] = "before";
+            }
+            server.Root = root;
+            var restored = await repo.RestoreRejectedNoteAsync(Id, "  restore context  ", TestContext.Current.CancellationToken);
+
+            Assert.Equal("queued", restored.State);
+            Assert.Equal("proposal", restored.ReviewIntent);
+            Assert.Equal("restore context", restored.RequestedClarification);
+            Assert.Null(restored.RequestedRejectionReason);
+            Assert.Equal(hasProposal ? 1 : 0, restored.Attempts);
+            Assert.Equal("open", server.Root["Notes"]![Id]!["Status"]!.GetValue<string>());
+            Assert.Equal(restored.UpdatedAt, server.Root["Notes"]![Id]!["UpdatedAt"]!.GetValue<string>());
+            Assert.Equal("note-extra", server.Root["Notes"]![Id]!["Extra"]!.GetValue<string>());
+            Assert.Equal("meta", server.Root["Metadata"]!["Custom"]!.GetValue<string>());
+            Assert.Null(await Lease(server).RenewAsync(worker, TestContext.Current.CancellationToken));
+        }
+    }
+
+    [Fact]
+    public async Task New_transitions_reject_invalid_comments_states_and_note_statuses_without_writes()
+    {
+        foreach (var comment in new[] { " ", new string('x', 2_001) })
+        {
+            using var server = new Server();
+            var repo = Repository(server);
+            await Assert.ThrowsAsync<ArgumentException>(() => repo.RequestRejectionReviewAsync(Id, comment, TestContext.Current.CancellationToken));
+            await Assert.ThrowsAsync<ArgumentException>(() => repo.RequeueProcessingProposalAsync(Id, comment, TestContext.Current.CancellationToken));
+            await Assert.ThrowsAsync<ArgumentException>(() => repo.RestoreRejectedNoteAsync(Id, comment, TestContext.Current.CancellationToken));
+            Assert.Equal(0, server.Writes);
+        }
+
+        using var invalid = new Server();
+        SetProcessingProposal(invalid);
+        var repoInvalid = Repository(invalid);
+        var root = invalid.Root;
+        root["TaskProposals"]![Id]!["State"] = "queued";
+        invalid.Root = root;
+        var writes = invalid.Writes;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => repoInvalid.RequestRejectionReviewAsync(Id, "reason", TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => repoInvalid.RequeueProcessingProposalAsync(Id, "comment", TestContext.Current.CancellationToken));
+        root = invalid.Root;
+        root["Notes"]![Id]!["Status"] = "open";
+        root["TaskProposals"]!.AsObject().Remove(Id);
+        invalid.Root = root;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => repoInvalid.RestoreRejectedNoteAsync(Id, "comment", TestContext.Current.CancellationToken));
+        Assert.Equal(writes, invalid.Writes);
+    }
+
+    [Fact]
     public async Task Concurrent_rejection_confirmation_from_two_instances_has_exactly_one_success()
     {
         using var server = new Server();
