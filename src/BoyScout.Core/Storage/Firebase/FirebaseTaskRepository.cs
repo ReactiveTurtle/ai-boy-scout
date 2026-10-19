@@ -7,11 +7,15 @@ using BoyScout.Core.Tasks;
 namespace BoyScout.Core.Storage.Firebase;
 
 public sealed record FirebaseTaskProposal(
-    string ReportId, long ProjectId, string State, string Relevance, string RecommendedAction,
-    string Title, string Description, string AcceptanceCriteria, string? VerificationSummary,
+    string ReportId, long ProjectId, string State, string? Relevance, string? RecommendedAction,
+    string? Title, string? Description, string? AcceptanceCriteria, string? VerificationSummary,
     string CreatedAt, string UpdatedAt, string? AgentCheckedAt = null,
     string? HumanApprovedAt = null, string? HumanRejectedAt = null,
-    string? CurrentConsequences = null);
+    string? CurrentConsequences = null, string? ReviewIntent = null,
+    string? RequestedRejectionReason = null, string? RequestedClarification = null,
+    string? FinalRejectionReason = null, string? Error = null, int Attempts = 0,
+    string? LocalizedReportTitle = null, string? LocalizedReportObservation = null,
+    string? LocalizedReportImpact = null, string? LocalizedReportSuggestedAction = null);
 
 public sealed record FirebaseTaskPage(IReadOnlyList<BoyScoutTask> Items, string? NextCursor);
 
@@ -62,6 +66,133 @@ public sealed class FirebaseTaskRepository(FirebaseRealtimeDatabaseTransport tra
         throw new InvalidOperationException("Project remained contended; proposal was not saved.");
     }
 
+    public Task<FirebaseTaskProposal> SaveCurrentProposalAsync(FirebaseProjectLeaseHandle handle, string reportId,
+        string title, string description, string acceptanceCriteria, string? verificationSummary,
+        CancellationToken cancellationToken = default, string? currentConsequences = null,
+        string? localizedReportTitle = null, string? localizedReportObservation = null,
+        string? localizedReportImpact = null, string? localizedReportSuggestedAction = null)
+    {
+        Required(title, nameof(title));
+        Required(description, nameof(description));
+        Required(acceptanceCriteria, nameof(acceptanceCriteria));
+        OptionalRequired(verificationSummary, nameof(verificationSummary));
+        OptionalRequired(currentConsequences, nameof(currentConsequences));
+        ValidateLocalized(localizedReportTitle, localizedReportObservation, localizedReportImpact, localizedReportSuggestedAction);
+        return WriteAgentResultAsync(handle, reportId, TaskProposalStates.Ready, TaskProposalRelevances.Current,
+            TaskProposalRecommendedActions.CreateTask, cancellationToken, new()
+            {
+                ["Title"] = title.Trim(), ["Description"] = description.Trim(),
+                ["AcceptanceCriteria"] = acceptanceCriteria.Trim(),
+                ["VerificationSummary"] = Trim(verificationSummary), ["CurrentConsequences"] = Trim(currentConsequences),
+                ["FinalRejectionReason"] = null, ["Error"] = null,
+                ["LocalizedReportTitle"] = Trim(localizedReportTitle),
+                ["LocalizedReportObservation"] = Trim(localizedReportObservation),
+                ["LocalizedReportImpact"] = Trim(localizedReportImpact),
+                ["LocalizedReportSuggestedAction"] = Trim(localizedReportSuggestedAction)
+            });
+    }
+
+    public Task<FirebaseTaskProposal> SaveRejectionRecommendationAsync(FirebaseProjectLeaseHandle handle,
+        string reportId, string finalRejectionReason, string verificationSummary,
+        CancellationToken cancellationToken = default, string? localizedReportTitle = null,
+        string? localizedReportObservation = null, string? localizedReportImpact = null,
+        string? localizedReportSuggestedAction = null)
+    {
+        Required(finalRejectionReason, nameof(finalRejectionReason));
+        Required(verificationSummary, nameof(verificationSummary));
+        ValidateLocalized(localizedReportTitle, localizedReportObservation, localizedReportImpact, localizedReportSuggestedAction);
+        return WriteAgentResultAsync(handle, reportId, TaskProposalStates.Ready, TaskProposalRelevances.Obsolete,
+            TaskProposalRecommendedActions.Reject, cancellationToken, new()
+            {
+                ["Title"] = null, ["Description"] = null, ["AcceptanceCriteria"] = null,
+                ["CurrentConsequences"] = null, ["FinalRejectionReason"] = finalRejectionReason.Trim(),
+                ["VerificationSummary"] = verificationSummary.Trim(), ["Error"] = null,
+                ["LocalizedReportTitle"] = Trim(localizedReportTitle),
+                ["LocalizedReportObservation"] = Trim(localizedReportObservation),
+                ["LocalizedReportImpact"] = Trim(localizedReportImpact),
+                ["LocalizedReportSuggestedAction"] = Trim(localizedReportSuggestedAction)
+            });
+    }
+
+    public Task<FirebaseTaskProposal> MarkUnverifiedAsync(FirebaseProjectLeaseHandle handle, string reportId,
+        string summary, string relevance = TaskProposalRelevances.Unverified,
+        CancellationToken cancellationToken = default, string? localizedReportTitle = null,
+        string? localizedReportObservation = null, string? localizedReportImpact = null,
+        string? localizedReportSuggestedAction = null)
+    {
+        Required(summary, nameof(summary));
+        if (relevance is not (TaskProposalRelevances.Current or TaskProposalRelevances.Unverified))
+            throw new ArgumentException("An unverified proposal must have current or unverified relevance.", nameof(relevance));
+        ValidateLocalized(localizedReportTitle, localizedReportObservation, localizedReportImpact, localizedReportSuggestedAction);
+        return WriteAgentResultAsync(handle, reportId, TaskProposalStates.Unverified, relevance, null,
+            cancellationToken, new()
+            {
+                ["Title"] = null, ["Description"] = null, ["AcceptanceCriteria"] = null,
+                ["CurrentConsequences"] = null, ["FinalRejectionReason"] = null,
+                ["VerificationSummary"] = summary.Trim(), ["Error"] = null,
+                ["LocalizedReportTitle"] = Trim(localizedReportTitle),
+                ["LocalizedReportObservation"] = Trim(localizedReportObservation),
+                ["LocalizedReportImpact"] = Trim(localizedReportImpact),
+                ["LocalizedReportSuggestedAction"] = Trim(localizedReportSuggestedAction)
+            });
+    }
+
+    public Task<FirebaseTaskProposal> FailProposalAsync(FirebaseProjectLeaseHandle handle, string reportId,
+        string error, CancellationToken cancellationToken = default)
+    {
+        Required(error, nameof(error));
+        return WriteAgentResultAsync(handle, reportId, TaskProposalStates.Failed, null, null,
+            cancellationToken, new()
+            {
+                ["CurrentConsequences"] = null, ["Error"] = error.Trim()
+            });
+    }
+
+    private async Task<FirebaseTaskProposal> WriteAgentResultAsync(FirebaseProjectLeaseHandle handle,
+        string reportId, string state, string? relevance, string? action, CancellationToken cancellationToken,
+        JsonObject result)
+    {
+        ArgumentNullException.ThrowIfNull(transport);
+        ArgumentNullException.ThrowIfNull(handle);
+        var projectId = ParseProjectId(reportId);
+        if (handle.ReportId != reportId) throw new ArgumentException("Lease belongs to a different note.", nameof(handle));
+        var path = ProjectPath(projectId);
+        for (var attempt = 0; attempt < MaxAttempts; attempt++)
+        {
+            var snapshot = await transport.GetAsync(path, cancellationToken);
+            var root = ReadProject(snapshot.Json, projectId);
+            var note = GetNote(root, reportId, projectId);
+            if (!FirebaseProjectLease.IsValid(root, handle, FirebaseProjectLease.ServerTime(snapshot)))
+                throw new InvalidOperationException("Processing lease is stale or expired; proposal was not saved.");
+            if (!Active(note)) throw new InvalidOperationException("Only an active note can receive a proposal.");
+            var proposals = GetCollection(root, "TaskProposals");
+            var tasks = GetCollection(root, "Tasks");
+            if (tasks.ContainsKey(TaskId(reportId)) || HasLinkedTask(tasks, reportId))
+                throw new InvalidOperationException("A task already exists for this note.");
+            if (!proposals.TryGetPropertyValue(reportId, out var existing))
+                throw new InvalidOperationException("Only a processing proposal can receive an agent result.");
+            var processingProposal = ReadProposal(existing, reportId, projectId);
+            if (processingProposal.State != TaskProposalStates.Processing)
+                throw new InvalidOperationException("Only a processing proposal can receive an agent result.");
+
+            var timestamp = Timestamp();
+            var proposal = ((JsonObject)existing!).DeepClone().AsObject();
+            proposal["State"] = state;
+            proposal["Relevance"] = relevance;
+            proposal["RecommendedAction"] = action;
+            proposal["UpdatedAt"] = timestamp;
+            proposal["AgentCheckedAt"] = timestamp;
+            proposal["HumanApprovedAt"] = null;
+            proposal["HumanRejectedAt"] = null;
+            foreach (var field in result) proposal[field.Key] = field.Value?.DeepClone();
+            proposals[reportId] = proposal;
+            root["TaskProposals"] = proposals;
+            if (await transport.PutIfMatchAsync(path, root.ToJsonString(), snapshot.ETag, cancellationToken))
+                return ReadProposal(proposal, reportId, projectId);
+        }
+        throw new InvalidOperationException("Project remained contended; proposal was not saved.");
+    }
+
     public async Task<BoyScoutTask> ConfirmProposalAsync(string reportId, Guid confirmerInstallationId,
         string confirmerName, CancellationToken cancellationToken = default)
     {
@@ -89,8 +220,8 @@ public sealed class FirebaseTaskRepository(FirebaseRealtimeDatabaseTransport tra
                 throw new InvalidOperationException("A task already exists for this note.");
 
             var timestamp = Timestamp();
-            var task = new BoyScoutTask(taskId, projectId, proposal.Title, proposal.Description,
-                proposal.AcceptanceCriteria, TaskStatuses.Todo, timestamp, timestamp,
+            var task = new BoyScoutTask(taskId, projectId, proposal.Title!, proposal.Description!,
+                proposal.AcceptanceCriteria!, TaskStatuses.Todo, timestamp, timestamp,
                 [reportId], confirmerName.Trim(), confirmerInstallationId, proposal.CurrentConsequences);
             tasks[taskId] = JsonSerializer.SerializeToNode(task);
             root["Tasks"] = tasks;
@@ -232,17 +363,49 @@ public sealed class FirebaseTaskRepository(FirebaseRealtimeDatabaseTransport tra
     {
         if (value is not JsonObject node || !HasText(node, "ReportId", id) ||
             !HasLong(node, "ProjectId", projectId) || !HasText(node, "State") ||
-            !HasText(node, "Relevance") || !HasText(node, "RecommendedAction") ||
-            !HasText(node, "Title") || !HasText(node, "Description") ||
-            !HasText(node, "AcceptanceCriteria") || !HasText(node, "CreatedAt") ||
-            !HasText(node, "UpdatedAt")) throw InvalidData();
+            !HasText(node, "CreatedAt") || !HasText(node, "UpdatedAt") ||
+            !OptionalText(node, "Relevance") || !OptionalText(node, "RecommendedAction") ||
+            !OptionalText(node, "Title") || !OptionalText(node, "Description") ||
+            !OptionalText(node, "AcceptanceCriteria") || !OptionalText(node, "VerificationSummary") ||
+            !OptionalText(node, "CurrentConsequences") || !OptionalText(node, "FinalRejectionReason") ||
+            !OptionalText(node, "Error") || !OptionalText(node, "ReviewIntent") ||
+            !OptionalText(node, "RequestedRejectionReason") || !OptionalText(node, "RequestedClarification") ||
+            !OptionalText(node, "LocalizedReportTitle") || !OptionalText(node, "LocalizedReportObservation") ||
+            !OptionalText(node, "LocalizedReportImpact") || !OptionalText(node, "LocalizedReportSuggestedAction") ||
+            node.ContainsKey("Attempts") && !TryReadAttempts(node, out _)) throw InvalidData();
         var proposal = node.Deserialize<FirebaseTaskProposal>()!;
-        if (proposal.State is not (TaskProposalStates.Ready or TaskProposalStates.Confirmed) ||
-            proposal.Relevance != TaskProposalRelevances.Current ||
-            proposal.RecommendedAction != TaskProposalRecommendedActions.CreateTask ||
-            proposal.VerificationSummary is not null && string.IsNullOrWhiteSpace(proposal.VerificationSummary))
-            throw InvalidData();
+        if (proposal.Attempts < 0) throw InvalidData();
+        var current = proposal.Relevance == TaskProposalRelevances.Current &&
+            proposal.RecommendedAction == TaskProposalRecommendedActions.CreateTask &&
+            HasText(node, "Title") && HasText(node, "Description") && HasText(node, "AcceptanceCriteria") &&
+            proposal.State is TaskProposalStates.Ready or TaskProposalStates.Confirmed;
+        var obsolete = proposal.State is TaskProposalStates.Ready or TaskProposalStates.Rejected &&
+            proposal.Relevance == TaskProposalRelevances.Obsolete &&
+            proposal.RecommendedAction == TaskProposalRecommendedActions.Reject &&
+            HasText(node, "FinalRejectionReason") && HasText(node, "VerificationSummary") &&
+            proposal.Title is null && proposal.Description is null && proposal.AcceptanceCriteria is null;
+        var unverified = proposal.State == TaskProposalStates.Unverified &&
+            proposal.Relevance is TaskProposalRelevances.Current or TaskProposalRelevances.Unverified &&
+            proposal.RecommendedAction is null && HasText(node, "VerificationSummary");
+        var failed = proposal.State == TaskProposalStates.Failed && proposal.RecommendedAction is null && HasText(node, "Error");
+        var processing = proposal.State == TaskProposalStates.Processing &&
+            proposal.Relevance is null && proposal.RecommendedAction is null && proposal.Title is null &&
+            proposal.Description is null && proposal.AcceptanceCriteria is null &&
+            proposal.VerificationSummary is null && proposal.CurrentConsequences is null &&
+            proposal.FinalRejectionReason is null && proposal.Error is null;
+        if (!(current || obsolete || unverified || failed || processing)) throw InvalidData();
         return proposal;
+    }
+
+    private static bool OptionalText(JsonObject node, string key) =>
+        !node.ContainsKey(key) || node[key] is null || HasText(node, key);
+
+    private static int ReadAttempts(JsonObject node) => TryReadAttempts(node, out var attempts) ? attempts : 0;
+
+    private static bool TryReadAttempts(JsonObject node, out int attempts)
+    {
+        attempts = 0;
+        return !node.ContainsKey("Attempts") || node["Attempts"] is JsonValue value && value.TryGetValue(out attempts) && attempts >= 0;
     }
 
     private static bool HasText(JsonObject obj, string key, string? expected = null) =>
@@ -259,6 +422,18 @@ public sealed class FirebaseTaskRepository(FirebaseRealtimeDatabaseTransport tra
     {
         if (string.IsNullOrWhiteSpace(value)) throw new ArgumentException("Value is required.", name);
     }
+
+    private static void OptionalRequired(string? value, string name)
+    {
+        if (value is not null) Required(value, name);
+    }
+
+    private static void ValidateLocalized(params string?[] values)
+    {
+        foreach (var value in values) OptionalRequired(value, "localizedReport");
+    }
+
+    private static string? Trim(string? value) => value?.Trim();
 
     private static long ParseProjectId(string id)
     {

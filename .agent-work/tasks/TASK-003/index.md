@@ -56,3 +56,8 @@ operations and merged pagination are implemented together.
   a separate write; the lease and result must be checked in the same conditional mutation.
   Proposal readiness now uses the same-project CAS, but the complete worker and
   migration are not implemented yet.
+- ITR-019: persist the worker's ready, rejection, unverified, and failure outcomes under
+  the current Firebase note lease. Firebase activation remains disabled until queueing,
+  human review, and the production worker are connected.
+- next: discover and atomically claim eligible Firebase notes into a `processing` proposal,
+  respecting the selected local project binding and AI-read consent before invoking OpenCode.
