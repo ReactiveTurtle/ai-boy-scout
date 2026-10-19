@@ -231,6 +231,7 @@ export class App {
   protected readonly firebaseProjectId = signal('');
   protected readonly firebaseClientEmail = signal('');
   protected readonly firebasePrivateKey = signal('');
+  protected readonly firebaseConnectionState = signal<'idle' | 'checking' | 'connected' | 'failed'>('idle');
   protected readonly storagePending = signal(false);
   protected readonly remoteProjects = signal<RemoteProject[]>([]);
   protected readonly remoteBindings = signal<RemoteBinding[]>([]);
@@ -435,20 +436,35 @@ export class App {
     if (this.storagePending() || !this.firebaseUrl().trim() || !this.firebaseProjectId().trim() ||
         !this.firebaseClientEmail().trim() || !this.firebasePrivateKey().trim()) return;
     this.storagePending.set(true);
+    this.firebaseConnectionState.set('checking');
+    this.error.set(null);
     this.http.post<StorageStatus>('/api/storage/firebase', {
       databaseUrl: this.firebaseUrl().trim(),
       projectId: this.firebaseProjectId().trim(),
       clientEmail: this.firebaseClientEmail().trim(),
       privateKey: this.firebasePrivateKey(),
-    }).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
-      next: (status) => {
+    }).pipe(
+      switchMap((status) => {
         this.storageStatus.set(status);
+        return this.http.get<RemoteProject[]>('/api/remote-projects').pipe(
+          switchMap((projects) => of({ status, projects })),
+        );
+      }),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe({
+      next: ({ status, projects }) => {
+        this.storageStatus.set(status);
+        this.remoteProjects.set(projects);
         this.firebasePrivateKey.set('');
         this.storagePending.set(false);
-        this.notice.set('Данные Firebase сохранены локально; удалённое хранилище пока недоступно');
-        this.loadRemoteProjects();
+        this.firebaseConnectionState.set('connected');
+        this.notice.set('Доступ к Firebase проверен. Общая база готова к настройке проектов.');
       },
-      error: (error: HttpErrorResponse) => { this.storagePending.set(false); this.setError(error); },
+      error: (error: HttpErrorResponse) => {
+        this.storagePending.set(false);
+        this.firebaseConnectionState.set('failed');
+        this.setError(error);
+      },
     });
   }
 

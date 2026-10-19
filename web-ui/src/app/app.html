@@ -98,18 +98,26 @@
                 <section class="storage-card">
                   <span class="storage-step">02 / Общая база</span>
                   <h2>Firebase Realtime Database</h2>
-                  <p>{{ storageStatus()?.hasFirebaseConnection ? 'Учётные данные сохранены на этом компьютере.' : 'Учётные данные ещё не указаны.' }} Поля ниже сохраняют подключение, но не переводят заметки и задачи в Firebase.</p>
+                  <p>Укажите данные сервисного аккаунта Firebase. BoyScout сохранит секретный ключ на этом компьютере и проверит доступ к базе.</p>
+                  <div class="firebase-connection-state" [attr.data-state]="firebaseConnectionState()">
+                    <i></i>
+                    @if (firebaseConnectionState() === 'checking') { <span>Проверяем доступ к Firebase…</span> }
+                    @else if (firebaseConnectionState() === 'connected') { <span>Подключение проверено. Проекты Firebase доступны.</span> }
+                    @else if (firebaseConnectionState() === 'failed') { <span>Проверка не пройдена. Проверьте URL, права сервисного аккаунта и ключ.</span> }
+                    @else if (storageStatus()?.hasFirebaseConnection) { <span>Учётные данные сохранены. Введите их снова, чтобы проверить подключение.</span> }
+                    @else { <span>Firebase ещё не подключён.</span> }
+                  </div>
                   <form (submit)="$event.preventDefault(); saveFirebaseConnection()">
                     <label>Database URL <input type="url" required autocomplete="off" [value]="firebaseUrl()" (input)="firebaseUrl.set($any($event.target).value)" placeholder="https://example-default-rtdb.firebaseio.com" /></label>
                     <label>Project ID <input type="text" required autocomplete="off" [value]="firebaseProjectId()" (input)="firebaseProjectId.set($any($event.target).value)" /></label>
                     <label>Client email <input type="email" required autocomplete="off" [value]="firebaseClientEmail()" (input)="firebaseClientEmail.set($any($event.target).value)" /></label>
-                    <label>Private key <textarea required autocomplete="off" [value]="firebasePrivateKey()" (input)="firebasePrivateKey.set($any($event.target).value)"></textarea></label>
-                    <button type="submit" [disabled]="storagePending() || !firebaseUrl().trim() || !firebaseProjectId().trim() || !firebaseClientEmail().trim() || !firebasePrivateKey().trim()">Сохранить подключение локально</button>
+                    <label>Private key <textarea required autocomplete="new-password" [value]="firebasePrivateKey()" (input)="firebasePrivateKey.set($any($event.target).value)" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></label>
+                    <button type="submit" [disabled]="storagePending() || !firebaseUrl().trim() || !firebaseProjectId().trim() || !firebaseClientEmail().trim() || !firebasePrivateKey().trim()">{{ storagePending() ? 'Проверяем подключение…' : 'Сохранить и проверить доступ' }}</button>
                   </form>
                 </section>
               </div>
               <aside class="storage-aside" aria-label="Состояние хранения">
-                <div class="storage-status"><span class="storage-status-dot"></span><strong>Локальная SQLite активна</strong><p>API и MCP продолжают писать в локальную базу. Firebase нельзя выбрать для проекта до завершения смешанного чтения и удалённой обработки задач.</p></div>
+                <div class="storage-status"><span class="storage-status-dot"></span><strong>Локальная SQLite активна</strong><p>Проверка подтверждает доступ и позволяет настраивать общие проекты. Заметки, задачи, API и MCP пока продолжают работать через SQLite.</p></div>
                 <div class="storage-hint"><strong>Данные ключа</strong><p>Private key хранится на сервере, не возвращается в браузер и не записывается в репозиторий.</p></div>
                 <a href="/" class="storage-back">Вернуться к заметкам</a>
               </aside>

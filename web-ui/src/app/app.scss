@@ -79,6 +79,13 @@ button, input, textarea { color: inherit; }
 .storage-card input, .storage-card textarea { min-width: 0; width: 100%; padding: 10px; border: 1px solid #cdd9e9; border-radius: 6px; font: inherit; }
 .storage-card textarea { min-height: 120px; resize: vertical; }
 .storage-card button { justify-self: start; padding: 10px 16px; color: #fff; background: #425d80; border: 0; border-radius: 6px; cursor: pointer; }
+.firebase-connection-state { margin: 16px 0; padding: 11px 13px; display: flex; align-items: center; gap: 9px; color: #68758a; background: #f5f7fa; border: 1px solid var(--line); border-radius: 7px; font-size: 13px; line-height: 1.4; }
+.firebase-connection-state i { width: 8px; height: 8px; flex: 0 0 auto; background: #aab3c1; border-radius: 50%; }
+.firebase-connection-state[data-state='checking'] i { background: #d49b2c; animation: pulse 1s infinite alternate; }
+.firebase-connection-state[data-state='connected'] { color: #41742e; background: #f3faee; border-color: #d8e9cb; }
+.firebase-connection-state[data-state='connected'] i { background: var(--green); }
+.firebase-connection-state[data-state='failed'] { color: #9a4b4b; background: #fff5f5; border-color: #efd6d6; }
+.firebase-connection-state[data-state='failed'] i { background: #d56a6a; }
 .storage-aside { display: grid; gap: 14px; }
 .storage-status { background: #f5faef; }
 .storage-status-dot { width: 8px; height: 8px; margin-right: 8px; display: inline-block; background: var(--green); border-radius: 50%; }

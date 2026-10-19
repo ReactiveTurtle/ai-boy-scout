@@ -8,6 +8,65 @@ The source code is independent from application projects. Runtime data remains i
 %LOCALAPPDATA%\boy-scout-mcp\reports.db
 ```
 
+## Install and run
+
+Build from a local clone. Required tools are Git, Node.js 22.5 or later, and the .NET 10 SDK. OpenCode CLI (`opencode`) is required for background note verification; the site and MCP can be installed without enabling that worker.
+
+```text
+git clone https://github.com/ReactiveTurtle/ai-boy-scout.git
+cd ai-boy-scout
+npm install
+npm --prefix web-ui install
+npm run publish:mcp
+npm run publish:ui
+```
+
+`publish:mcp` creates `artifacts/mcp/BoyScout.Mcp.dll`. `publish:ui` builds Angular and publishes the local ASP.NET Core host to `artifacts/api`. Start the site in the foreground with:
+
+```text
+npm run start:ui
+```
+
+Open `http://127.0.0.1:5187`. The site and API bind to loopback only. Keep the source checkout in a stable local path: the published app uses that checkout as its content root, and the per-repository MCP setup refers to the published MCP DLL by absolute path.
+
+### Install MCP in a project repository
+
+1. Publish the MCP from the Boy Scout checkout with `npm run publish:mcp`.
+2. Start the Boy Scout site and open it in a browser.
+3. In Projects, add the target repository as a local project using its existing directory path.
+4. Select that project, open its settings, choose **Подключить MCP и ссылку на сайт к репозиторию**, and enter the repository root.
+5. Review the preview and confirm it in the UI.
+6. Restart OpenCode in that repository so it reloads `opencode.json`.
+
+The setup adds a project-local `boy-scout` stdio MCP entry to `opencode.json`, creates a `boy-scout.cmd` shortcut on Windows (`boy-scout.sh` on Unix-like systems), and excludes those local setup files through `.git/info/exclude`. It does not copy Boy Scout into the target repository, commit configuration, expose credentials, grant AI read consent, or start the site. If Boy Scout MCP is already registered globally in OpenCode, disable the duplicate global entry separately. To remove the project installation, remove its `boy-scout` entry and shortcut; `.git/info/exclude` can be edited manually.
+
+### Run the site in the background on Windows
+
+The background worker is hosted by the Boy Scout API process. Run that API at user logon with Task Scheduler; do not register the stdio MCP server as a background task because OpenCode starts it when needed. Run the following in PowerShell from the Boy Scout checkout after publishing:
+
+```powershell
+$root = (Resolve-Path .).Path
+$action = New-ScheduledTaskAction `
+  -Execute "dotnet" `
+  -Argument "`"$root\artifacts\api\BoyScout.Api.dll`" --contentRoot `"$root`" --urls http://127.0.0.1:5187" `
+  -WorkingDirectory $root
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+Register-ScheduledTask -TaskName "BoyScout" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Local Boy Scout site and background worker"
+Start-ScheduledTask -TaskName "BoyScout"
+```
+
+The task runs as the current user after sign-in, uses that user's local database/configuration, and restarts after a process failure. Visit `http://127.0.0.1:5187` to verify it started. Stop it with `Stop-ScheduledTask -TaskName "BoyScout"`; remove automatic startup with `Unregister-ScheduledTask -TaskName "BoyScout" -Confirm:$false`. Do not run both the scheduled task and `npm run start:ui` at the same time because both need port 5187.
+
+For a foreground/development run, use the API and Angular dev server instead:
+
+```text
+dotnet run --project src/BoyScout.Api --urls http://127.0.0.1:5187
+```
+
+In another terminal, from `web-ui`, run `npm start`; the dev UI is at `http://localhost:4200` and proxies API requests to the local host.
+
 ## Commands
 
 ```text
@@ -21,11 +80,7 @@ npm run start:ui
 dotnet test BoyScout.sln
 ```
 
-`publish:ui` builds Angular and publishes the ASP.NET Core host to `artifacts/api`. After publishing, `start:ui` serves the report browser and its API at `http://127.0.0.1:5187`.
-
-The HTTP API is intended for localhost only. Non-loopback API requests are rejected; browser writes from unrelated origins are rejected as well. Do not expose the site through a public reverse proxy. Firebase credentials and remote storage are not configured by this release.
-
-For Angular development, start the API with `dotnet run --project src/BoyScout.Api --urls http://127.0.0.1:5187`, then run `npm start` from `web-ui`. The Angular development server uses the included proxy configuration and opens at `http://localhost:4200`.
+The HTTP API is intended for localhost only. Non-loopback API requests are rejected; browser writes from unrelated origins are rejected as well. Do not expose the site through a public reverse proxy.
 
 The current release preserves the original four MCP tools:
 
@@ -42,11 +97,11 @@ The Projects sidebar can create a local project by name and an existing director
 
 "Настроить репозиторий" previews and confirms a local OpenCode MCP configuration and a shortcut to the common site in a chosen Git repository. It records the project in SQLite, adds the setup files to that checkout's `.git/info/exclude`, and does not copy the site or put secrets in the repository. Publish the MCP with `npm run publish:mcp` first and restart OpenCode after installation; an existing global MCP registration must be disabled separately if it duplicates the project entry.
 
-"Хранилище и имя" sets the installation name used on new notes and on human-confirmed tasks. It accepts Firebase Realtime Database credentials in separate fields and stores them in the per-user local config (DPAPI-protected key on Windows). These fields are preparation only: selecting Firebase is disabled until the complete remote workflow and migration have been implemented and tested. `BOY_SCOUT_CONFIG` can override the config path; with `BOY_SCOUT_DB` set, the default config lives beside that database.
+"Хранилище и имя" sets the installation name used on new notes and on human-confirmed tasks. The Firebase form stores service-account credentials in the per-user local config (DPAPI-protected key on Windows) and checks access by listing remote projects. A successful check does not switch any notes or tasks to Firebase. `BOY_SCOUT_CONFIG` can override the config path; with `BOY_SCOUT_DB` set, the default config lives beside that database.
 
-With Firebase credentials saved, the selected project's settings panel can create and list shared Firebase projects, bind an existing directory on this computer, and grant this installation separate AI read consent. A changed binding revokes that consent. These project setup operations do not migrate local notes or tasks and do not switch the API or MCP away from SQLite. Do not grant AI consent on another computer without checking its local binding.
+With Firebase access checked, the selected project's settings panel can create and list shared Firebase projects, bind an existing directory on this computer, and grant this installation separate AI read consent. A changed binding revokes that consent. These project setup operations do not migrate local notes or tasks and do not switch the API or MCP away from SQLite. Do not grant AI consent on another computer without checking its local binding.
 
-General BoyScout settings contain the installation name and Firebase credentials. Select a project to open its separate project settings for AI access, repository setup, remote path binding and transfer preview. A queued note without AI read consent explains why it cannot be processed; the global automation toggle does not grant consent. The per-project Firebase choice remains disabled: when implemented it will route only new records to Firebase and show older local records alongside them; moving older records will require a separate confirmed transfer.
+General BoyScout settings contain the installation name and Firebase credentials. Select a project to open its separate project settings for AI access, repository setup, remote path binding and transfer preview. A queued note without AI read consent explains why it cannot be processed; the global automation toggle does not grant consent. The per-project Firebase choice remains disabled. The intended activation is an explicit check-and-confirm workflow: it will route only new records to Firebase while existing records remain local; manually copying an individual local note is a separate operation.
 
 The panel can preview a local project's complete v11 data graph before a future transfer: report, proposal, task and link counts plus a deterministic snapshot checksum. This preview is read-only; no import or local deletion endpoint exists yet. The Firebase project-root lease and proposal CAS are not connected to the production worker, so distributed processing remains disabled.
 
