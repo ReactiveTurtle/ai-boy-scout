@@ -321,6 +321,42 @@ public sealed class FirebaseTaskRepository(FirebaseRealtimeDatabaseTransport tra
         throw new InvalidOperationException("Project remained contended; task was not confirmed.");
     }
 
+    public async Task<FirebaseTaskProposal> ConfirmRejectionAsync(string reportId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(transport);
+        var projectId = ParseProjectId(reportId);
+        var path = ProjectPath(projectId);
+        for (var attempt = 0; attempt < MaxAttempts; attempt++)
+        {
+            var snapshot = await transport.GetAsync(path, cancellationToken);
+            var root = ReadProject(snapshot.Json, projectId);
+            var note = GetNote(root, reportId, projectId);
+            var proposals = GetCollection(root, "TaskProposals");
+            if (!Active(note) || !proposals.TryGetPropertyValue(reportId, out var value))
+                throw new InvalidOperationException("Only an active note with a ready rejection recommendation can be confirmed.");
+            var proposal = ReadProposal(value, reportId, projectId);
+            if (proposal.State != TaskProposalStates.Ready || proposal.Relevance != TaskProposalRelevances.Obsolete ||
+                proposal.RecommendedAction != TaskProposalRecommendedActions.Reject)
+                throw new InvalidOperationException("Only a ready obsolete rejection recommendation can be confirmed.");
+
+            var timestamp = Timestamp();
+            var rejected = ((JsonObject)value!).DeepClone().AsObject();
+            rejected["State"] = TaskProposalStates.Rejected;
+            rejected["HumanRejectedAt"] = timestamp;
+            rejected["HumanApprovedAt"] = null;
+            rejected["CurrentConsequences"] = null;
+            rejected["UpdatedAt"] = timestamp;
+            proposals[reportId] = rejected;
+            root["TaskProposals"] = proposals;
+            note["Status"] = ReportStatuses.Dismissed;
+            note["UpdatedAt"] = timestamp;
+            if (await transport.PutIfMatchAsync(path, root.ToJsonString(), snapshot.ETag, cancellationToken))
+                return ReadProposal(rejected, reportId, projectId);
+        }
+        throw new InvalidOperationException("Project remained contended; rejection was not confirmed.");
+    }
+
     public async Task<FirebaseTaskProposal?> GetProposalAsync(string reportId, CancellationToken cancellationToken = default)
     {
         var projectId = ParseProjectId(reportId);

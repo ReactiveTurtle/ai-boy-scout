@@ -65,6 +65,112 @@ public sealed class FirebaseTaskRepositoryTests
     }
 
     [Fact]
+    public async Task Confirm_rejection_atomically_dismisses_note_and_preserves_final_and_unrelated_data()
+    {
+        using var server = new Server();
+        var repo = Repository(server);
+        await SaveRejection(repo, server);
+        var state = server.Root;
+        state["TaskProposals"]![Id]!["HumanApprovedAt"] = "previous-approval";
+        state["TaskProposals"]![Id]!["CurrentConsequences"] = "clear this";
+        state["TaskProposals"]![Id]!["Extra"] = "proposal-extra";
+        server.Root = state;
+        var writes = server.Writes;
+
+        var rejected = await repo.ConfirmRejectionAsync(Id, TestContext.Current.CancellationToken);
+
+        Assert.Equal("rejected", rejected.State);
+        Assert.Equal("Independently verified obsolete", rejected.FinalRejectionReason);
+        Assert.Equal("Checked upstream and downstream references.", rejected.VerificationSummary);
+        Assert.NotNull(rejected.HumanRejectedAt);
+        Assert.Null(rejected.HumanApprovedAt);
+        Assert.Null(rejected.CurrentConsequences);
+        Assert.Equal(rejected.HumanRejectedAt, rejected.UpdatedAt);
+        Assert.Equal(rejected.UpdatedAt, server.Root["Notes"]![Id]!["UpdatedAt"]!.GetValue<string>());
+        Assert.Equal("dismissed", server.Root["Notes"]![Id]!["Status"]!.GetValue<string>());
+        Assert.Equal(writes + 1, server.Writes);
+        Assert.Equal("proposal-extra", server.Root["TaskProposals"]![Id]!["Extra"]!.GetValue<string>());
+        Assert.Equal("note-extra", server.Root["Notes"]![Id]!["Extra"]!.GetValue<string>());
+        Assert.Equal("meta", server.Root["Metadata"]!["Custom"]!.GetValue<string>());
+        Assert.Equal("keep", server.Root["Tasks"]!["BST-other"]!["Extra"]!.GetValue<string>());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => repo.ConfirmRejectionAsync(Id,
+            TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Confirm_rejection_refuses_missing_incompatible_current_and_inactive_inputs_without_writing()
+    {
+        foreach (var scenario in new[] { "missing", "incompatible", "current", "inactive" })
+        {
+            using var server = new Server();
+            var repo = Repository(server);
+            await SaveRejection(repo, server);
+            var state = server.Root;
+            if (scenario == "missing") state["TaskProposals"]!.AsObject().Remove(Id);
+            if (scenario == "incompatible")
+            {
+                state["TaskProposals"]![Id]!["State"] = "unverified";
+                state["TaskProposals"]![Id]!["Relevance"] = "current";
+                state["TaskProposals"]![Id]!["RecommendedAction"] = null;
+                state["TaskProposals"]![Id]!["FinalRejectionReason"] = null;
+            }
+            if (scenario == "current")
+            {
+                state["TaskProposals"]![Id]!["State"] = "ready";
+                state["TaskProposals"]![Id]!["Relevance"] = "current";
+                state["TaskProposals"]![Id]!["RecommendedAction"] = "create_task";
+                state["TaskProposals"]![Id]!["Title"] = "Current title";
+                state["TaskProposals"]![Id]!["Description"] = "Current description";
+                state["TaskProposals"]![Id]!["AcceptanceCriteria"] = "Current criteria";
+                state["TaskProposals"]![Id]!["FinalRejectionReason"] = null;
+            }
+            if (scenario == "inactive") state["Notes"]![Id]!["Status"] = "resolved";
+            server.Root = state;
+            var writes = server.Writes;
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => repo.ConfirmRejectionAsync(Id,
+                TestContext.Current.CancellationToken));
+
+            Assert.Equal(writes, server.Writes);
+        }
+    }
+
+    [Fact]
+    public async Task Confirm_rejection_retries_project_cas_conflict()
+    {
+        using var server = new Server();
+        var repo = Repository(server);
+        await SaveRejection(repo, server);
+        server.ConflictNext = true;
+
+        await repo.ConfirmRejectionAsync(Id, TestContext.Current.CancellationToken);
+
+        Assert.Equal("rejected", server.Root["TaskProposals"]![Id]!["State"]!.GetValue<string>());
+        Assert.Equal("dismissed", server.Root["Notes"]![Id]!["Status"]!.GetValue<string>());
+        Assert.Equal(4, server.Writes);
+    }
+
+    [Fact]
+    public async Task Concurrent_rejection_confirmation_from_two_instances_has_exactly_one_success()
+    {
+        using var server = new Server();
+        await SaveRejection(Repository(server), server);
+        var outcomes = await Task.WhenAll(Enumerable.Range(0, 2).Select(async _ =>
+        {
+            try
+            {
+                await Repository(server).ConfirmRejectionAsync(Id, TestContext.Current.CancellationToken);
+                return true;
+            }
+            catch (InvalidOperationException) { return false; }
+        }));
+
+        Assert.Equal(1, outcomes.Count(success => success));
+        Assert.Equal("rejected", server.Root["TaskProposals"]![Id]!["State"]!.GetValue<string>());
+        Assert.Equal("dismissed", server.Root["Notes"]![Id]!["Status"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Stale_or_invalid_state_never_writes()
     {
         using var server = new Server();
@@ -517,6 +623,14 @@ public sealed class FirebaseTaskRepositoryTests
         public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "boy-scout-" + Guid.NewGuid().ToString("N"));
         public TempDirectory() => Directory.CreateDirectory(Path);
         public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
+
+    private static async Task<FirebaseTaskProposal> SaveRejection(FirebaseTaskRepository repo, Server server)
+    {
+        SetProcessingProposal(server);
+        var handle = await Acquire(server);
+        return await repo.SaveRejectionRecommendationAsync(handle, Id, "Independently verified obsolete",
+            "Checked upstream and downstream references.", TestContext.Current.CancellationToken);
     }
 
     private static FirebaseProjectLease Lease(Server server) => new(new FirebaseRealtimeDatabaseTransport(

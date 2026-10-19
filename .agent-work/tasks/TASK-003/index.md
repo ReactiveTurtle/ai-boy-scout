@@ -63,5 +63,7 @@ operations and merged pagination are implemented together.
   proposal, respecting the selected local project binding and AI-read consent before invoking OpenCode.
 - ITR-021: connect claimed Firebase proposals to the existing OpenCode generator, renew leases
   for long runs, and persist outcomes through the lease-fenced FirebaseTaskRepository methods.
-- next: expose remote proposal/workflow reads and human decisions through API/UI, including
-  atomic Firebase rejection and task confirmation, before allowing project activation.
+- ITR-022: atomically confirm an obsolete Firebase recommendation as rejected, updating the
+  proposal and note status together while preserving the rest of the project root.
+- next: expose Firebase proposal and workflow reads plus positive/rejection confirmation through
+  the local API and review UI without enabling per-project storage yet.
