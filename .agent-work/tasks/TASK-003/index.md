@@ -61,5 +61,7 @@ operations and merged pagination are implemented together.
   human review, and the production worker are connected.
 - ITR-020: discover and atomically claim eligible Firebase notes into a `processing`
   proposal, respecting the selected local project binding and AI-read consent before invoking OpenCode.
-- next: connect claimed Firebase proposals to the existing OpenCode generator, renew leases
+- ITR-021: connect claimed Firebase proposals to the existing OpenCode generator, renew leases
   for long runs, and persist outcomes through the lease-fenced FirebaseTaskRepository methods.
+- next: expose remote proposal/workflow reads and human decisions through API/UI, including
+  atomic Firebase rejection and task confirmation, before allowing project activation.

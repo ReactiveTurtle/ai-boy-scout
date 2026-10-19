@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using BoyScout.Api.Ai;
 using BoyScout.Core.Reports;
 using BoyScout.Core.Storage;
+using BoyScout.Core.Storage.Firebase;
 using BoyScout.Core.Tasks;
 using Microsoft.Data.Sqlite;
 using Xunit;
@@ -158,6 +159,73 @@ public sealed class OpenCodeProposalGeneratorTests
             SqliteConnection.ClearAllPools();
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Fact]
+    public void MapFirebaseClaim_preserves_remote_identity_content_and_review_context()
+    {
+        const string reportId = "BSR-7-0000000000000000042";
+        var claim = new FirebaseTaskClaim(
+            JsonNode.Parse("""
+                {
+                  "Id": "BSR-7-0000000000000000042",
+                  "ProjectId": 7,
+                  "OriginalPath": "C:/repo",
+                  "Title": "Remote finding",
+                  "Location": "src/worker.cs",
+                  "Observation": "The worker skips review context.",
+                  "Impact": "Reviews lose intent.",
+                  "SuggestedAction": "Preserve context.",
+                  "DiscoveredDuring": "ITR-020",
+                  "CreatedAt": "2026-10-01T00:00:00Z"
+                }
+                """)!.AsObject(),
+            new FirebaseTaskProposal(reportId, 7, TaskProposalStates.Processing, null, null,
+                null, null, null, null, "2026-10-01T00:00:00Z", "2026-10-02T00:00:00Z",
+                ReviewIntent: TaskProposalReviewIntents.Rejection,
+                RequestedRejectionReason: "Already fixed",
+                RequestedClarification: "Check the race condition",
+                Attempts: 3),
+            new FirebaseProjectLeaseHandle(reportId, "installation", "worker", "token", 2,
+                DateTimeOffset.Parse("2026-10-02T00:02:00Z")));
+
+        var mapped = ProposalGenerationService.MapFirebaseClaim(claim, "C:/repo");
+
+        Assert.Equal(42, mapped.Id);
+        Assert.Equal(reportId, mapped.ReportId);
+        Assert.Equal(7, mapped.ProjectId);
+        Assert.Equal("C:/repo", mapped.ReportProject);
+        Assert.Equal(TaskProposalReviewIntents.Rejection, mapped.ReviewIntent);
+        Assert.Equal("Already fixed", mapped.RequestedRejectionReason);
+        Assert.Equal("Check the race condition", mapped.RequestedClarification);
+        Assert.Equal(3, mapped.Attempts);
+        Assert.Equal("2026-10-01T00:00:00Z", mapped.CreatedAt);
+        Assert.Equal("2026-10-02T00:00:00Z", mapped.UpdatedAt);
+        Assert.Equal("Remote finding", mapped.ReportTitle);
+        Assert.Equal("src/worker.cs", mapped.ReportLocation);
+        Assert.Equal("The worker skips review context.", mapped.ReportObservation);
+        Assert.Equal("Reviews lose intent.", mapped.ReportImpact);
+        Assert.Equal("Preserve context.", mapped.ReportSuggestedAction);
+        Assert.Equal("ITR-020", mapped.ReportDiscoveredDuring);
+    }
+
+    [Fact]
+    public void MapFirebaseClaim_rejects_inconsistent_remote_ids_and_missing_required_content()
+    {
+        var note = JsonNode.Parse("""
+            { "Id": "BSR-7-0000000000000000042", "ProjectId": 7, "OriginalPath": "C:/repo", "CreatedAt": "2026-10-01T00:00:00Z", "Title": "Finding", "Observation": "Observed" }
+            """)!.AsObject();
+        var proposal = new FirebaseTaskProposal("BSR-7-0000000000000000042", 7,
+            TaskProposalStates.Processing, null, null, null, null, null, null,
+            "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z");
+        var lease = new FirebaseProjectLeaseHandle(proposal.ReportId, "installation", "worker", "token", 1,
+            DateTimeOffset.Parse("2026-10-02T00:02:00Z"));
+
+        Assert.Throws<InvalidOperationException>(() => ProposalGenerationService.MapFirebaseClaim(
+            new FirebaseTaskClaim(note, proposal with { ProjectId = 8 }, lease), "C:/repo"));
+        note["Observation"] = null;
+        Assert.Throws<InvalidOperationException>(() => ProposalGenerationService.MapFirebaseClaim(
+            new FirebaseTaskClaim(note, proposal, lease), "C:/repo"));
     }
 
     private static OpenCodeProposalGenerator CreateGenerator(FakeCommandRunner runner) =>
