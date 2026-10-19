@@ -69,5 +69,7 @@ operations and merged pagination are implemented together.
   the localhost API without enabling per-project storage yet.
 - ITR-024: provide a Firebase notes/proposals review panel with human confirm/reject actions,
   separate from the existing SQLite history while mixed paging is not yet implemented.
-- next: add Firebase retry, clarification, restore, and reprocess transitions, then show remote
-  tasks and merge Firebase/SQLite records in their existing workspaces before enabling storage.
+- ITR-025: let a reviewer retry or clarify an active Firebase proposal with a required comment,
+  atomically clearing the old result and returning it to the remote queue.
+- next: support Firebase rejection-review requests, processing requeue, and restore; invalidate
+  leases atomically when canceling in-flight work.

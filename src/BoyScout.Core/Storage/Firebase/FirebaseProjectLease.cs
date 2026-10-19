@@ -89,6 +89,20 @@ public sealed class FirebaseProjectLease
     internal static bool IsValid(JsonObject root, FirebaseProjectLeaseHandle handle, DateTimeOffset now) =>
         Matches(ReadState(Leases(root), handle.ReportId), handle, now);
 
+    internal static void Invalidate(JsonObject root, string reportId, DateTimeOffset now)
+    {
+        var leases = Leases(root);
+        var previous = ReadState(leases, reportId);
+        if (previous?.Generation == long.MaxValue) throw new InvalidOperationException("Lease generation exhausted.");
+        leases[reportId] = new JsonObject
+        {
+            ["OwnerInstallationId"] = null, ["OwnerName"] = null, ["Token"] = null,
+            ["Generation"] = (previous?.Generation ?? 0) + 1,
+            ["ExpiresAt"] = now.ToString("O", CultureInfo.InvariantCulture)
+        };
+        root["ProcessingLeases"] = leases;
+    }
+
     internal static DateTimeOffset ServerTime(FirebaseSnapshot snapshot) =>
         snapshot.ServerDate is { } date && date >= DateTimeOffset.UnixEpoch && date.Offset == TimeSpan.Zero
             ? date : throw new InvalidOperationException("Firebase GET returned no valid UTC server Date; lease operation refused.");

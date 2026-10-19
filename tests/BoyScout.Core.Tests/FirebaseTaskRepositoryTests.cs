@@ -151,6 +151,114 @@ public sealed class FirebaseTaskRepositoryTests
     }
 
     [Fact]
+    public async Task Retry_proposal_clears_results_preserves_review_intent_and_fences_old_worker()
+    {
+        using var server = new Server();
+        var repo = Repository(server);
+        var worker = await Acquire(server);
+        SetReadyProposal(server, "ready");
+        var state = server.Root;
+        state["TaskProposals"]![Id]!["ReviewIntent"] = "rejection";
+        state["TaskProposals"]![Id]!["RequestedRejectionReason"] = "retain requested reason";
+        state["TaskProposals"]![Id]!["RequestedClarification"] = "old clarification";
+        state["TaskProposals"]![Id]!["LocalizedReportTitle"] = "Localized title";
+        state["TaskProposals"]![Id]!["Extra"] = "proposal-extra";
+        state["TaskProposals"]![Id]!["HumanApprovedAt"] = "approved";
+        state["TaskProposals"]![Id]!["HumanRejectedAt"] = "rejected";
+        server.Root = state;
+
+        var queued = await repo.RetryProposalAsync(Id, "  please retry  ", TestContext.Current.CancellationToken);
+
+        Assert.Equal("queued", queued.State);
+        Assert.Equal("please retry", queued.RequestedClarification);
+        Assert.Equal("rejection", queued.ReviewIntent);
+        Assert.Equal("retain requested reason", queued.RequestedRejectionReason);
+        Assert.Equal(2, queued.Attempts);
+        Assert.Equal("2025-01-01T00:00:00.000Z", queued.CreatedAt);
+        Assert.Equal("Localized title", queued.LocalizedReportTitle);
+        Assert.Null(queued.Title);
+        Assert.Null(queued.Description);
+        Assert.Null(queued.AcceptanceCriteria);
+        Assert.Null(queued.VerificationSummary);
+        Assert.Null(queued.Relevance);
+        Assert.Null(queued.RecommendedAction);
+        Assert.Null(queued.CurrentConsequences);
+        Assert.Null(queued.FinalRejectionReason);
+        Assert.Null(queued.Error);
+        Assert.Null(queued.AgentCheckedAt);
+        Assert.Null(queued.HumanApprovedAt);
+        Assert.Null(queued.HumanRejectedAt);
+        Assert.Equal("proposal-extra", server.Root["TaskProposals"]![Id]!["Extra"]!.GetValue<string>());
+        Assert.Equal("note-extra", server.Root["Notes"]![Id]!["Extra"]!.GetValue<string>());
+        Assert.Equal("meta", server.Root["Metadata"]!["Custom"]!.GetValue<string>());
+        Assert.Equal("keep", server.Root["Tasks"]!["BST-other"]!["Extra"]!.GetValue<string>());
+        Assert.Null(await Lease(server).RenewAsync(worker, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => repo.SaveReadyProposalAsync(worker, Id,
+            "stale", "description", "criteria", null, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Request_clarification_sets_proposal_intent_and_retries_cas_conflict()
+    {
+        using var server = new Server();
+        var repo = Repository(server);
+        SetReadyProposal(server, "failed");
+        var state = server.Root;
+        state["TaskProposals"]![Id]!["ReviewIntent"] = "rejection";
+        state["TaskProposals"]![Id]!["RequestedRejectionReason"] = "clear this";
+        state["TaskProposals"]![Id]!["Error"] = "previous error";
+        server.Root = state;
+        server.ConflictNext = true;
+
+        var queued = await repo.RequestClarificationAsync(Id, "  clarify impact  ", TestContext.Current.CancellationToken);
+
+        Assert.Equal("queued", queued.State);
+        Assert.Equal("proposal", queued.ReviewIntent);
+        Assert.Null(queued.RequestedRejectionReason);
+        Assert.Equal("clarify impact", queued.RequestedClarification);
+        Assert.Equal(2, queued.Attempts);
+        Assert.Null(queued.Error);
+        Assert.Equal(2, server.Writes);
+        Assert.Equal("note-extra", server.Root["Notes"]![Id]!["Extra"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Retry_and_clarification_reject_invalid_comments_and_proposal_states_without_writing()
+    {
+        foreach (var invalidComment in new[] { " ", new string('x', 2_001) })
+        {
+            using var commentServer = new Server();
+            var commentRepo = Repository(commentServer);
+            SetReadyProposal(commentServer, "ready");
+            var writes = commentServer.Writes;
+            await Assert.ThrowsAsync<ArgumentException>(() => commentRepo.RetryProposalAsync(Id, invalidComment,
+                TestContext.Current.CancellationToken));
+            await Assert.ThrowsAsync<ArgumentException>(() => commentRepo.RequestClarificationAsync(Id, invalidComment,
+                TestContext.Current.CancellationToken));
+            Assert.Equal(writes, commentServer.Writes);
+        }
+
+        foreach (var scenario in new[] { "queued", "processing", "confirmed", "rejected", "missing", "inactive" })
+        {
+            using var server = new Server();
+            var repo = Repository(server);
+            SetReadyProposal(server, "ready");
+            var state = server.Root;
+            if (scenario == "queued" || scenario == "processing" || scenario == "confirmed" || scenario == "rejected")
+                state["TaskProposals"]![Id]!["State"] = scenario;
+            if (scenario == "missing") state["TaskProposals"]!.AsObject().Remove(Id);
+            if (scenario == "inactive") state["Notes"]![Id]!["Status"] = "resolved";
+            server.Root = state;
+            var writes = server.Writes;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => repo.RetryProposalAsync(Id, "retry",
+                TestContext.Current.CancellationToken));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => repo.RequestClarificationAsync(Id, "clarify",
+                TestContext.Current.CancellationToken));
+            Assert.Equal(writes, server.Writes);
+        }
+    }
+
+    [Fact]
     public async Task Concurrent_rejection_confirmation_from_two_instances_has_exactly_one_success()
     {
         using var server = new Server();
@@ -652,6 +760,64 @@ public sealed class FirebaseTaskRepositoryTests
             {"ReportId":"BSR-1-0000000000000000001","ProjectId":1,"State":"processing",
              "CreatedAt":"2025-01-01T00:00:00.000Z","UpdatedAt":"2025-01-01T00:00:00.000Z","Attempts":1}
             """);
+        server.Root = root;
+    }
+
+    private static void SetReadyProposal(Server server, string state)
+    {
+        var proposal = JsonNode.Parse("""
+            {"ReportId":"BSR-1-0000000000000000001","ProjectId":1,"State":"ready",
+             "Relevance":"current","RecommendedAction":"create_task","Title":"Title",
+             "Description":"Description","AcceptanceCriteria":"Criteria","VerificationSummary":"Verified",
+             "CurrentConsequences":"Context","FinalRejectionReason":"Final reason","Error":"Error",
+             "CreatedAt":"2025-01-01T00:00:00.000Z","UpdatedAt":"2025-01-02T00:00:00.000Z",
+             "AgentCheckedAt":"agent","HumanApprovedAt":"approved","HumanRejectedAt":"rejected","Attempts":1}
+            """)!.AsObject();
+        if (state is "queued" or "processing")
+        {
+            foreach (var key in new[] { "Relevance", "RecommendedAction", "Title", "Description", "AcceptanceCriteria", "VerificationSummary", "CurrentConsequences", "FinalRejectionReason", "Error" })
+                proposal[key] = null;
+        }
+        else if (state == "failed")
+        {
+            proposal["Relevance"] = null;
+            proposal["RecommendedAction"] = null;
+            proposal["Title"] = null;
+            proposal["Description"] = null;
+            proposal["AcceptanceCriteria"] = null;
+            proposal["VerificationSummary"] = null;
+            proposal["FinalRejectionReason"] = null;
+        }
+        else if (state == "unverified")
+        {
+            proposal["Relevance"] = "unverified";
+            proposal["RecommendedAction"] = null;
+            proposal["Title"] = null;
+            proposal["Description"] = null;
+            proposal["AcceptanceCriteria"] = null;
+            proposal["FinalRejectionReason"] = null;
+            proposal["Error"] = null;
+        }
+        else if (state == "rejected")
+        {
+            proposal["Relevance"] = "obsolete";
+            proposal["RecommendedAction"] = "reject";
+            proposal["Title"] = null;
+            proposal["Description"] = null;
+            proposal["AcceptanceCriteria"] = null;
+            proposal["CurrentConsequences"] = null;
+            proposal["Error"] = null;
+        }
+        else if (state == "confirmed")
+        {
+            proposal["Error"] = null;
+        }
+        proposal["State"] = state;
+        var root = server.Root;
+        root["TaskProposals"] = new JsonObject
+        {
+            [Id] = proposal
+        };
         server.Root = root;
     }
 

@@ -25,6 +25,7 @@ public sealed record FirebaseTaskClaim(JsonObject Note, FirebaseTaskProposal Pro
 public sealed class FirebaseTaskRepository(FirebaseRealtimeDatabaseTransport transport)
 {
     private const int MaxAttempts = 5;
+    private const int MaxCommentLength = 2_000;
 
     public async Task<FirebaseTaskClaim?> ClaimNextEligibleNoteAsync(ProjectBinding binding,
         string workerInstallationId, string workerName, TimeSpan leaseDuration,
@@ -231,6 +232,71 @@ public sealed class FirebaseTaskRepository(FirebaseRealtimeDatabaseTransport tra
             {
                 ["CurrentConsequences"] = null, ["Error"] = error.Trim()
             });
+    }
+
+    public Task<FirebaseTaskProposal> RetryProposalAsync(string reportId, string comment,
+        CancellationToken cancellationToken = default) =>
+        RequeueReviewProposalAsync(reportId, comment, clarification: false, cancellationToken);
+
+    public Task<FirebaseTaskProposal> RequestClarificationAsync(string reportId, string instruction,
+        CancellationToken cancellationToken = default) =>
+        RequeueReviewProposalAsync(reportId, instruction, clarification: true, cancellationToken);
+
+    private async Task<FirebaseTaskProposal> RequeueReviewProposalAsync(string reportId, string comment,
+        bool clarification, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(transport);
+        var projectId = ParseProjectId(reportId);
+        Required(comment, clarification ? "instruction" : "comment");
+        var normalizedComment = comment.Trim();
+        if (normalizedComment.Length > MaxCommentLength)
+            throw new ArgumentException($"Comment must not exceed {MaxCommentLength} characters.", clarification ? "instruction" : "comment");
+
+        var path = ProjectPath(projectId);
+        for (var attempt = 0; attempt < MaxAttempts; attempt++)
+        {
+            var snapshot = await transport.GetAsync(path, cancellationToken);
+            var root = ReadProject(snapshot.Json, projectId);
+            var note = GetNote(root, reportId, projectId);
+            var proposals = GetCollection(root, "TaskProposals");
+            if (!Active(note) || !proposals.TryGetPropertyValue(reportId, out var value))
+                throw new InvalidOperationException("Only an active note with a ready, unverified, or failed proposal can be requeued.");
+            var existing = ReadProposal(value, reportId, projectId);
+            if (existing.State is not (TaskProposalStates.Ready or TaskProposalStates.Unverified or TaskProposalStates.Failed))
+                throw new InvalidOperationException("Only a ready, unverified, or failed proposal can be requeued.");
+            if (existing.Attempts == int.MaxValue) throw new InvalidOperationException("Proposal attempt count exhausted.");
+
+            var timestamp = Timestamp();
+            var proposal = ((JsonObject)value!).DeepClone().AsObject();
+            proposal["State"] = TaskProposalStates.Queued;
+            proposal["UpdatedAt"] = timestamp;
+            proposal["Attempts"] = existing.Attempts + 1;
+            proposal["Title"] = null;
+            proposal["Description"] = null;
+            proposal["AcceptanceCriteria"] = null;
+            proposal["CurrentConsequences"] = null;
+            proposal["Relevance"] = null;
+            proposal["VerificationSummary"] = null;
+            proposal["RecommendedAction"] = null;
+            proposal["FinalRejectionReason"] = null;
+            proposal["Error"] = null;
+            proposal["AgentCheckedAt"] = null;
+            proposal["HumanApprovedAt"] = null;
+            proposal["HumanRejectedAt"] = null;
+            proposal["RequestedClarification"] = normalizedComment;
+            if (clarification)
+            {
+                proposal["ReviewIntent"] = TaskProposalReviewIntents.Proposal;
+                proposal["RequestedRejectionReason"] = null;
+            }
+
+            FirebaseProjectLease.Invalidate(root, reportId, FirebaseProjectLease.ServerTime(snapshot));
+            proposals[reportId] = proposal;
+            root["TaskProposals"] = proposals;
+            if (await transport.PutIfMatchAsync(path, root.ToJsonString(), snapshot.ETag, cancellationToken))
+                return ReadProposal(proposal, reportId, projectId);
+        }
+        throw new InvalidOperationException("Project remained contended; proposal was not requeued.");
     }
 
     private async Task<FirebaseTaskProposal> WriteAgentResultAsync(FirebaseProjectLeaseHandle handle,
