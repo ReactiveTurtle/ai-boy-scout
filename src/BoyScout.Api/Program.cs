@@ -176,6 +176,102 @@ app.MapPatch("/api/remote-projects/{id:long}/ai-consent", IResult (
     catch (DirectoryNotFoundException exception) { return Results.Conflict(new { error = exception.Message }); }
     catch (ArgumentOutOfRangeException exception) { return Results.BadRequest(new { error = exception.Message }); }
 });
+app.MapGet("/api/remote-projects/{projectId:long}/notes", async Task<IResult> (
+    BoyScoutConfigService service, long projectId, string? before, int limit = 40, CancellationToken token = default) =>
+{
+    if (projectId <= 0) return Results.BadRequest(new { error = "Project ID must be positive." });
+    if (service.ResolveByProjectId(projectId) is null)
+        return Results.Conflict(new { error = "Bind the Firebase project to a local path before browsing its notes." });
+    try
+    {
+        using var transport = new FirebaseRealtimeDatabaseTransport(service.LoadConfiguredFirebaseConnection());
+        var repository = new FirebaseReportRepository(transport, new FirebaseSequenceAllocator(transport));
+        if (await repository.GetProjectAsync(projectId, token) is null) return Results.NotFound();
+        return Results.Ok(await repository.BrowseNotesAsync(projectId, before, limit, token));
+    }
+    catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (InvalidOperationException exception) when (exception.Message == "Configure Firebase credentials first.")
+    { return Results.Conflict(new { error = exception.Message }); }
+    catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException)
+    { return Results.Problem("Could not read Firebase notes.", statusCode: StatusCodes.Status502BadGateway); }
+});
+app.MapGet("/api/remote-projects/{projectId:long}/notes/{noteId}/proposal", async Task<IResult> (
+    BoyScoutConfigService service, long projectId, string noteId, CancellationToken token) =>
+{
+    if (projectId <= 0) return Results.BadRequest(new { error = "Project ID must be positive." });
+    if (!noteId.StartsWith($"BSR-{projectId}-", StringComparison.Ordinal))
+        return Results.BadRequest(new { error = "Note ID does not belong to the selected Firebase project." });
+    if (service.ResolveByProjectId(projectId) is null)
+        return Results.Conflict(new { error = "Bind the Firebase project to a local path before reviewing its notes." });
+    try
+    {
+        using var transport = new FirebaseRealtimeDatabaseTransport(service.LoadConfiguredFirebaseConnection());
+        var repository = new FirebaseTaskRepository(transport);
+        var note = await new FirebaseReportRepository(transport, new FirebaseSequenceAllocator(transport)).GetNoteAsync(noteId, token);
+        if (note is null || note.ProjectId != projectId) return Results.NotFound();
+        var proposal = await repository.GetProposalAsync(noteId, token);
+        return proposal is null ? Results.NoContent() : Results.Ok(proposal);
+    }
+    catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (InvalidOperationException exception) when (exception.Message == "Configure Firebase credentials first.")
+    { return Results.Conflict(new { error = exception.Message }); }
+    catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException)
+    { return Results.Problem("Could not read the Firebase proposal.", statusCode: StatusCodes.Status502BadGateway); }
+});
+app.MapPost("/api/remote-projects/{projectId:long}/notes/{noteId}/confirm", async Task<IResult> (
+    BoyScoutConfigService service, long projectId, string noteId, CancellationToken token) =>
+{
+    if (projectId <= 0) return Results.BadRequest(new { error = "Project ID must be positive." });
+    if (!noteId.StartsWith($"BSR-{projectId}-", StringComparison.Ordinal))
+        return Results.BadRequest(new { error = "Note ID does not belong to the selected Firebase project." });
+    if (service.ResolveByProjectId(projectId) is null)
+        return Results.Conflict(new { error = "Bind the Firebase project to a local path before reviewing its notes." });
+    try
+    {
+        using var transport = new FirebaseRealtimeDatabaseTransport(service.LoadConfiguredFirebaseConnection());
+        var reports = new FirebaseReportRepository(transport, new FirebaseSequenceAllocator(transport));
+        var note = await reports.GetNoteAsync(noteId, token);
+        if (note is null || note.ProjectId != projectId) return Results.NotFound();
+        var identity = service.LoadStatus();
+        var task = await new FirebaseTaskRepository(transport).ConfirmProposalAsync(noteId,
+            identity.InstallationId, identity.DisplayName, token);
+        return Results.Ok(task);
+    }
+    catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (InvalidOperationException exception) when (exception.Message == "Configure Firebase credentials first.")
+    { return Results.Conflict(new { error = exception.Message }); }
+    catch (InvalidOperationException exception)
+    { return Results.Conflict(new { error = exception.Message }); }
+    catch (Exception exception) when (exception is HttpRequestException)
+    { return Results.Problem("Could not confirm the Firebase proposal.", statusCode: StatusCodes.Status502BadGateway); }
+});
+app.MapPost("/api/remote-projects/{projectId:long}/notes/{noteId}/confirm-rejection", async Task<IResult> (
+    BoyScoutConfigService service, long projectId, string noteId, CancellationToken token) =>
+{
+    if (projectId <= 0) return Results.BadRequest(new { error = "Project ID must be positive." });
+    if (!noteId.StartsWith($"BSR-{projectId}-", StringComparison.Ordinal))
+        return Results.BadRequest(new { error = "Note ID does not belong to the selected Firebase project." });
+    if (service.ResolveByProjectId(projectId) is null)
+        return Results.Conflict(new { error = "Bind the Firebase project to a local path before reviewing its notes." });
+    try
+    {
+        using var transport = new FirebaseRealtimeDatabaseTransport(service.LoadConfiguredFirebaseConnection());
+        var reports = new FirebaseReportRepository(transport, new FirebaseSequenceAllocator(transport));
+        var note = await reports.GetNoteAsync(noteId, token);
+        if (note is null || note.ProjectId != projectId) return Results.NotFound();
+        return Results.Ok(await new FirebaseTaskRepository(transport).ConfirmRejectionAsync(noteId, token));
+    }
+    catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (InvalidOperationException exception) when (exception.Message == "Configure Firebase credentials first.")
+    { return Results.Conflict(new { error = exception.Message }); }
+    catch (InvalidOperationException exception)
+    { return Results.Conflict(new { error = exception.Message }); }
+    catch (Exception exception) when (exception is HttpRequestException)
+    { return Results.Problem("Could not confirm the Firebase rejection.", statusCode: StatusCodes.Status502BadGateway); }
+});
 app.MapGet("/api/automation", (AiProcessingControl control) => Results.Ok(control.Status));
 app.MapPatch(
     "/api/automation",

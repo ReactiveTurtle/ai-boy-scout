@@ -65,5 +65,7 @@ operations and merged pagination are implemented together.
   for long runs, and persist outcomes through the lease-fenced FirebaseTaskRepository methods.
 - ITR-022: atomically confirm an obsolete Firebase recommendation as rejected, updating the
   proposal and note status together while preserving the rest of the project root.
-- next: expose Firebase proposal and workflow reads plus positive/rejection confirmation through
-  the local API and review UI without enabling per-project storage yet.
+- ITR-023: expose bound Firebase note, proposal, and human confirmation operations through
+  the localhost API without enabling per-project storage yet.
+- next: present Firebase notes and proposals in the review UI and expose the current/rejection
+  confirmation actions without mixing them into the SQLite list until paging is integrated.
