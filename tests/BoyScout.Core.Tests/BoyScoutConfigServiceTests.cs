@@ -142,6 +142,43 @@ public sealed class BoyScoutConfigServiceTests
     }
 
     [Fact]
+    public void Firebase_write_selection_defaults_off_requires_credentials_and_consent_and_resets_on_rebind()
+    {
+        using var fixture = new ConfigFixture();
+        var first = fixture.CreateProjectDirectory("first");
+        var second = fixture.CreateProjectDirectory("second");
+        var service = new BoyScoutConfigService(fixture.Path);
+        service.LoadStatus();
+        var binding = service.Bind(17, first);
+        Assert.False(binding.FirebaseWriteEnabled);
+        Assert.Throws<InvalidOperationException>(() => service.SetFirebaseWriteEnabled(17, true));
+
+        service.SaveConnection(Credentials);
+        service.Bind(17, first);
+        Assert.Throws<InvalidOperationException>(() => service.SetFirebaseWriteEnabled(17, true));
+        service.SetAiReadConsent(17, true);
+        var enabled = service.SetFirebaseWriteEnabled(17, true);
+        Assert.True(enabled.FirebaseWriteEnabled);
+        Assert.True(new BoyScoutConfigService(fixture.Path).ResolveByProjectId(17)!.FirebaseWriteEnabled);
+
+        Directory.Delete(first);
+        Assert.Throws<DirectoryNotFoundException>(() => service.SetFirebaseWriteEnabled(17, true));
+        Assert.True(service.ResolveByProjectId(17)!.FirebaseWriteEnabled);
+
+        var disabled = service.SetFirebaseWriteEnabled(17, false);
+        Assert.False(disabled.FirebaseWriteEnabled);
+        Directory.CreateDirectory(first);
+        service.SetFirebaseWriteEnabled(17, true);
+        var rebound = service.Bind(17, second);
+        Assert.False(rebound.FirebaseWriteEnabled);
+        Assert.False(rebound.AiReadConsent);
+
+        var oldJson = File.ReadAllText(fixture.Path).Replace(",\"FirebaseWriteEnabled\":false", "", StringComparison.Ordinal);
+        File.WriteAllText(fixture.Path, oldJson);
+        Assert.False(new BoyScoutConfigService(fixture.Path).ResolveByProjectId(17)!.FirebaseWriteEnabled);
+    }
+
+    [Fact]
     public void Rejects_duplicate_or_missing_directory_without_changing_bindings_and_rebinding_revokes_consent()
     {
         using var fixture = new ConfigFixture();

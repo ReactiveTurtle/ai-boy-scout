@@ -13,7 +13,7 @@ public sealed record FirebaseConnectionInput(string DatabaseUrl, string ProjectI
 // Status is safe to return to a browser; credentials are only available via LoadFirebaseConnection.
 public sealed record BoyScoutConfigStatus(Guid InstallationId, string DisplayName, StorageBackend Backend, bool HasFirebaseConnection);
 
-public sealed record ProjectBinding(long ProjectId, string LocalPath, bool AiReadConsent);
+public sealed record ProjectBinding(long ProjectId, string LocalPath, bool AiReadConsent, bool FirebaseWriteEnabled = false);
 
 public sealed class BoyScoutConfigService
 {
@@ -111,7 +111,9 @@ public sealed class BoyScoutConfigService
             var current = config.Bindings.FindIndex(binding => binding.ProjectId == projectId);
             var binding = new ProjectBinding(projectId, normalized,
                 current >= 0 && PathComparer.Equals(config.Bindings[current].LocalPath, normalized)
-                    && config.Bindings[current].AiReadConsent);
+                    && config.Bindings[current].AiReadConsent,
+                current >= 0 && PathComparer.Equals(config.Bindings[current].LocalPath, normalized)
+                    && config.Bindings[current].FirebaseWriteEnabled);
             if (current >= 0) config.Bindings[current] = binding;
             else config.Bindings.Add(binding);
             Write(config);
@@ -145,6 +147,28 @@ public sealed class BoyScoutConfigService
             config.Bindings[index] = binding;
             Write(config);
             return binding;
+        });
+    }
+
+    public ProjectBinding SetFirebaseWriteEnabled(long projectId, bool enabled)
+    {
+        if (projectId <= 0) throw new ArgumentOutOfRangeException(nameof(projectId));
+        return WithLock(() =>
+        {
+            var config = ReadOrCreate();
+            var index = config.Bindings.FindIndex(binding => binding.ProjectId == projectId);
+            if (index < 0) throw new KeyNotFoundException("Project is not bound.");
+            var binding = config.Bindings[index];
+            if (enabled)
+            {
+                if (!HasConnection(config)) throw new InvalidOperationException("Configure Firebase credentials before enabling remote notes.");
+                if (!binding.AiReadConsent) throw new InvalidOperationException("Grant AI read consent before enabling Firebase notes.");
+                if (!Directory.Exists(binding.LocalPath)) throw new DirectoryNotFoundException("Bound project directory is unavailable.");
+            }
+            var updated = binding with { FirebaseWriteEnabled = enabled };
+            config.Bindings[index] = updated;
+            Write(config);
+            return updated;
         });
     }
 
