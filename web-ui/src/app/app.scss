@@ -173,6 +173,8 @@ button, input, textarea { color: inherit; }
 .detail-metadata > span:first-child:has(.status-dot[data-state='rejected']) { color: #a54d55; background: #fff0f1; }
 .detail-actions { margin-bottom: 24px; padding-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; border-top: 1px solid var(--line); }
 .detail-actions button { padding: 10px 13px; color: #425270; background: #fff; border: 1px solid #dce4f0; border-radius: 7px; font-size: 12px; cursor: pointer; }
+.firebase-transfer-note { margin: -14px 0 18px; color: #586782; font-size: 12px; line-height: 1.5; }
+.firebase-transfer-note code { padding: 2px 4px; background: #f1f4f8; border-radius: 4px; }
 .detail-actions .primary-action { color: #fff; background: var(--green); border-color: var(--green); }
 .detail-actions .reject-action { color: #995454; border-color: #e8cccc; }
 .details section { margin-bottom: 12px; padding: 14px 16px; background: #fff; border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 2px 10px rgba(28, 54, 91, .025); }

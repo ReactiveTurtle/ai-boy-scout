@@ -323,6 +323,48 @@ app.MapGet(
             return Results.BadRequest(new { error = exception.Message });
         }
     });
+app.MapPost(
+    "/api/notes/{id}/firebase-transfer",
+    async Task<IResult> (IReportStore store, BoyScoutConfigService service, string id, CancellationToken token) =>
+    {
+        BoyScoutReport? note;
+        try { note = store.Get(id); }
+        catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
+        if (note is null) return Results.NotFound(new { error = "Local note was not found." });
+
+        ProjectBinding? binding;
+        try { binding = service.ResolveByPath(note.Project); }
+        catch (ArgumentException exception) { return Results.Conflict(new { error = exception.Message }); }
+        if (binding is null)
+            return Results.Conflict(new { error = "Bind this local project to a Firebase project before transferring notes." });
+
+        try
+        {
+            using var transport = new FirebaseRealtimeDatabaseTransport(service.LoadConfiguredFirebaseConnection());
+            var repository = new FirebaseReportRepository(transport, new FirebaseSequenceAllocator(transport));
+            if (await repository.GetProjectAsync(binding.ProjectId, token) is null)
+                return Results.Conflict(new { error = "The bound Firebase project no longer exists." });
+
+            var status = service.LoadStatus();
+            var imported = await repository.ImportNoteAsync(binding.ProjectId, note, status.InstallationId,
+                status.DisplayName, token);
+            return Results.Ok(new
+            {
+                localNoteId = note.Id,
+                firebaseNoteId = imported.Note.Id,
+                alreadyImported = imported.AlreadyImported,
+                note = imported.Note,
+            });
+        }
+        catch (InvalidOperationException exception) when (exception.Message == "Configure Firebase credentials first.")
+        {
+            return Results.Conflict(new { error = exception.Message });
+        }
+        catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException)
+        {
+            return Results.Problem("Could not transfer the local note to Firebase.", statusCode: StatusCodes.Status502BadGateway);
+        }
+    });
 app.MapGet(
     "/api/notes/{id}/workflow",
     IResult (ITaskStore store, string id) =>

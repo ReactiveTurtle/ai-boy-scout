@@ -35,6 +35,37 @@ public sealed class FirebaseReportRepositoryTests
     }
 
     [Fact]
+    public async Task Import_preserves_note_and_is_idempotent_after_a_project_conflict()
+    {
+        using var server = new Server();
+        var repository = Repository(server);
+        var project = await repository.CreateProjectAsync("Shared", TestContext.Current.CancellationToken);
+        var createdAt = "2024-03-04T05:06:07.000Z";
+        var updatedAt = "2024-04-05T06:07:08.000Z";
+        var source = new BoyScoutReport("BSR-000042", "/repo", "Original title", "src/file.cs", "Observed",
+            "Impact", "Action", "During review", ReportStatuses.Resolved, createdAt, updatedAt,
+            "original-machine", Installation, 7);
+
+        server.ConflictNextProjectPut = true;
+        var imported = await repository.ImportNoteAsync(project.Id, source, Installation, "current-machine", TestContext.Current.CancellationToken);
+        Assert.False(imported.AlreadyImported);
+        Assert.Equal("BSR-000042", imported.Note.OriginNoteId);
+        Assert.Equal(Installation, imported.Note.OriginInstallationId);
+        Assert.Equal(ReportStatuses.Resolved, imported.Note.Status);
+        Assert.Equal(createdAt, imported.Note.CreatedAt);
+        Assert.Equal(updatedAt, imported.Note.UpdatedAt);
+        Assert.Equal("original-machine", imported.Note.SourceName);
+        Assert.Equal(Installation, imported.Note.SourceInstallationId);
+
+        var writes = server.ProjectWrites;
+        var duplicate = await repository.ImportNoteAsync(project.Id, source, Installation, "current-machine", TestContext.Current.CancellationToken);
+        Assert.True(duplicate.AlreadyImported);
+        Assert.Equal(imported.Note, duplicate.Note);
+        Assert.Equal(writes, server.ProjectWrites);
+        Assert.Equal(imported.Note, await repository.GetNoteAsync(imported.Note.Id, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Two_instances_retry_conflicts_without_losing_notes_or_status()
     {
         using var server = new Server();

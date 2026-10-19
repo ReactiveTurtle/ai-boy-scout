@@ -147,6 +147,7 @@ interface StorageStatus {
 
 interface RemoteProject { id: number; name: string; }
 interface RemoteBinding { projectId: number; localPath: string; aiReadConsent: boolean; }
+interface FirebaseNoteTransferResult { localNoteId: string; firebaseNoteId: string; alreadyImported: boolean; }
 
 interface TransferPreview {
   projectId: number;
@@ -235,6 +236,7 @@ export class App {
   protected readonly storagePending = signal(false);
   protected readonly remoteProjects = signal<RemoteProject[]>([]);
   protected readonly remoteBindings = signal<RemoteBinding[]>([]);
+  protected readonly transferredNoteIds = signal<Record<string, string>>({});
   protected readonly remoteProjectName = signal('');
   protected readonly remotePaths = signal<Record<number, string>>({});
   protected readonly previewProjectId = signal<number | null>(null);
@@ -313,7 +315,16 @@ export class App {
     this.http.get<StorageStatus>('/api/storage')
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
-        next: (status) => { this.storageStatus.set(status); this.displayName.set(status.displayName); },
+        next: (status) => {
+          this.storageStatus.set(status);
+          this.displayName.set(status.displayName);
+          this.http.get<RemoteBinding[]>('/api/remote-projects/bindings')
+            .pipe(takeUntilDestroyed(this.destroyRef))
+            .subscribe({
+              next: (bindings) => this.remoteBindings.set(bindings),
+              error: (error: HttpErrorResponse) => this.setError(error),
+            });
+        },
         error: (error: HttpErrorResponse) => this.setError(error),
       });
   }
@@ -347,6 +358,29 @@ export class App {
 
   protected remoteBinding(projectId: number): RemoteBinding | null {
     return this.remoteBindings().find((binding) => binding.projectId === projectId) ?? null;
+  }
+
+  protected firebaseBindingForNote(note: Note): RemoteBinding | null {
+    const path = note.project.replace(/[\\/]+$/, '').toLocaleLowerCase();
+    return this.remoteBindings().find((binding) =>
+      binding.localPath.replace(/[\\/]+$/, '').toLocaleLowerCase() === path) ?? null;
+  }
+
+  protected transferNoteToFirebase(note: Note): void {
+    if (this.storagePending() || !this.storageStatus()?.hasFirebaseConnection) return;
+    this.storagePending.set(true);
+    this.http.post<FirebaseNoteTransferResult>(`/api/notes/${encodeURIComponent(note.id)}/firebase-transfer`, {})
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (result) => {
+          this.transferredNoteIds.update((ids) => ({ ...ids, [note.id]: result.firebaseNoteId }));
+          this.storagePending.set(false);
+          this.notice.set(result.alreadyImported
+            ? `Копия заметки уже есть в Firebase (${result.firebaseNoteId})`
+            : `Заметка скопирована в Firebase (${result.firebaseNoteId}); локальный оригинал сохранён`);
+        },
+        error: (error: HttpErrorResponse) => { this.storagePending.set(false); this.setError(error); },
+      });
   }
 
   protected remotePath(projectId: number): string {

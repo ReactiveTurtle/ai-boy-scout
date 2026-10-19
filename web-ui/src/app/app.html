@@ -267,7 +267,17 @@
                 <div class="detail-actions">
                   <button type="button" (click)="openProject(note)">Открыть проект</button>
                   <button type="button" (click)="copyText(note.project, 'Путь проекта скопирован')">Копировать путь</button>
+                  @if (storageStatus()?.hasFirebaseConnection) {
+                    @if (firebaseBindingForNote(note)) {
+                      <button type="button" [disabled]="storagePending()" (click)="transferNoteToFirebase(note)">
+                        {{ transferredNoteIds()[note.id] ? 'Копия в Firebase' : 'Скопировать заметку в Firebase' }}
+                      </button>
+                    } @else if (note.projectId !== null) {
+                      <button type="button" (click)="openNoteProjectSettings(note)">Сначала привязать проект Firebase</button>
+                    }
+                  }
                 </div>
+                @if (transferredNoteIds()[note.id]) { <p class="firebase-transfer-note">Firebase ID: <code>{{ transferredNoteIds()[note.id] }}</code>. Локальная заметка не удалена; proposal и задача не копируются.</p> }
                 <div class="note-narrative">
                   <section class="observation-card"><h3>Наблюдение</h3><p>{{ note.observation }}</p></section>
                   @if (note.impact) { <section class="impact-card"><h3>Почему важно</h3><p>{{ note.impact }}</p></section> }

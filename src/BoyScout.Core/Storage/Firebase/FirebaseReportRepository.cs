@@ -10,7 +10,10 @@ public sealed record FirebaseReportProject(long Id, string Name);
 public sealed record FirebaseReportNote(
     string Id, long ProjectId, string OriginalPath, string Title, string? Location,
     string Observation, string? Impact, string? SuggestedAction, string? DiscoveredDuring,
-    string Status, string CreatedAt, string UpdatedAt, Guid SourceInstallationId, string SourceName);
+    string Status, string CreatedAt, string UpdatedAt, Guid SourceInstallationId, string SourceName,
+    Guid? OriginInstallationId = null, string? OriginNoteId = null);
+
+public sealed record FirebaseNoteImportResult(FirebaseReportNote Note, bool AlreadyImported);
 
 public sealed record FirebaseNotePage(IReadOnlyList<FirebaseReportNote> Items, string? NextCursor);
 
@@ -109,6 +112,46 @@ public sealed class FirebaseReportRepository(FirebaseRealtimeDatabaseTransport t
                 return note;
         }
         throw new InvalidOperationException("Project remained contended; note was not written.");
+    }
+
+    public async Task<FirebaseNoteImportResult> ImportNoteAsync(long projectId, BoyScoutReport source,
+        Guid originInstallationId, string sourceName, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (projectId <= 0) throw new ArgumentOutOfRangeException(nameof(projectId));
+        if (originInstallationId == Guid.Empty) throw new ArgumentException("Origin installation ID is required.", nameof(originInstallationId));
+        if (string.IsNullOrWhiteSpace(source.Id)) throw new ArgumentException("Origin note ID is required.", nameof(source));
+        if (string.IsNullOrWhiteSpace(source.Project) || string.IsNullOrWhiteSpace(source.Title) ||
+            string.IsNullOrWhiteSpace(source.Observation) || !ReportStatuses.IsValid(source.Status))
+            throw new ArgumentException("Local note data is invalid.", nameof(source));
+        if (string.IsNullOrWhiteSpace(sourceName)) throw new ArgumentException("Source name is required.", nameof(sourceName));
+
+        var path = ProjectPath(projectId);
+        for (var attempt = 0; attempt < MaxAttempts; attempt++)
+        {
+            var snapshot = await transport.GetAsync(path, cancellationToken);
+            var document = ReadProject(snapshot.Json, projectId);
+            if (document is null) throw new InvalidOperationException("Remote project does not exist.");
+
+            var imported = document.Notes.Values.FirstOrDefault(note =>
+                note.OriginInstallationId == originInstallationId && note.OriginNoteId == source.Id);
+            if (imported is not null) return new FirebaseNoteImportResult(imported, AlreadyImported: true);
+
+            var sequence = await sequences.AllocateAsync("report-notes", cancellationToken);
+            var id = $"BSR-{projectId.ToString(CultureInfo.InvariantCulture)}-{sequence.ToString("D19", CultureInfo.InvariantCulture)}";
+            var note = new FirebaseReportNote(id, projectId, source.Project, source.Title, source.Location,
+                source.Observation, source.Impact, source.SuggestedAction, source.DiscoveredDuring,
+                source.Status, source.CreatedAt, source.UpdatedAt,
+                source.SourceInstallationId ?? originInstallationId,
+                string.IsNullOrWhiteSpace(source.SourceName) ? sourceName.Trim() : source.SourceName,
+                originInstallationId, source.Id);
+            if (!document.Notes.TryAdd(id, note))
+                throw new InvalidOperationException("Allocated note ID already exists; refusing to overwrite it.");
+            if (await transport.PutIfMatchAsync(path, JsonSerializer.Serialize(document, JsonOptions), snapshot.ETag, cancellationToken))
+                return new FirebaseNoteImportResult(note, AlreadyImported: false);
+        }
+
+        throw new InvalidOperationException("Project remained contended; note was not imported.");
     }
 
     public async Task<FirebaseReportNote?> GetNoteAsync(string id, CancellationToken cancellationToken = default)
