@@ -182,6 +182,7 @@ interface FirebaseProposalView {
   requestedRejectionReason: string | null;
   requestedClarification: string | null;
 }
+interface FirebaseReprocessView { proposal: FirebaseProposalView; deletedTaskId: string | null; }
 
 interface TransferPreview {
   projectId: number;
@@ -276,6 +277,8 @@ export class App {
   protected readonly firebaseNotesLoading = signal(false);
   protected readonly selectedFirebaseNote = signal<FirebaseRemoteNote | null>(null);
   protected readonly selectedFirebaseProposal = signal<FirebaseProposalView | null>(null);
+  protected readonly firebaseRejectionReason = signal('');
+  protected readonly firebaseReviewComment = signal('');
   protected readonly transferredNoteIds = signal<Record<string, string>>({});
   protected readonly remoteProjectName = signal('');
   protected readonly remotePaths = signal<Record<number, string>>({});
@@ -484,6 +487,8 @@ export class App {
     if (!projectId) return;
     this.selectedFirebaseNote.set(note);
     this.selectedFirebaseProposal.set(null);
+    this.firebaseRejectionReason.set('');
+    this.firebaseReviewComment.set('');
     this.http.get<FirebaseProposalView | null>(`/api/remote-projects/${projectId}/notes/${encodeURIComponent(note.id)}/proposal`)
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
@@ -530,6 +535,48 @@ export class App {
         },
         error: (error: HttpErrorResponse) => { this.storagePending.set(false); this.setError(error); },
       });
+  }
+
+  protected firebaseAiReadConsentGranted(): boolean {
+    return this.firebaseBindingForSelectedProject()?.aiReadConsent ?? false;
+  }
+
+  protected firebaseNoteIsActive(note: FirebaseRemoteNote): boolean {
+    return note.status === 'open' || note.status === 'accepted' || note.status === 'planned';
+  }
+
+  protected submitFirebaseReviewTransition(action: 'rejection-review' | 'clarification' | 'retry' | 'requeue' | 'restore' | 'reprocess'): void {
+    const projectId = this.firebaseNotesProjectId();
+    const note = this.selectedFirebaseNote();
+    if (!projectId || !note || this.storagePending() || !this.firebaseAiReadConsentGranted()) return;
+    const rejectionReason = this.firebaseRejectionReason().trim();
+    const comment = this.firebaseReviewComment().trim();
+    const body = action === 'rejection-review' ? { reason: rejectionReason } : { comment };
+    if (action === 'rejection-review' ? !rejectionReason : !comment) return;
+
+    this.storagePending.set(true);
+    this.http.post<FirebaseProposalView | FirebaseReprocessView>(
+      `/api/remote-projects/${projectId}/notes/${encodeURIComponent(note.id)}/${action}`, body,
+    ).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: (result) => {
+        const proposal = action === 'reprocess' ? (result as FirebaseReprocessView).proposal : result as FirebaseProposalView;
+        this.selectedFirebaseProposal.set(proposal);
+        if (action === 'restore' || action === 'reprocess') {
+          this.selectedFirebaseNote.update((current) => current ? { ...current, status: 'open' } : current);
+        }
+        this.firebaseRejectionReason.set('');
+        this.firebaseReviewComment.set('');
+        this.storagePending.set(false);
+        const deletedTaskId = action === 'reprocess' ? (result as FirebaseReprocessView).deletedTaskId : null;
+        this.notice.set(deletedTaskId
+          ? `Задача ${deletedTaskId} удалена, заметка возвращена в Firebase-очередь`
+          : action === 'rejection-review' ? 'Причина отправлена OpenCode на проверку'
+            : action === 'restore' ? 'Заметка восстановлена и поставлена в очередь Firebase'
+              : action === 'reprocess' ? 'Заметка возвращена в Firebase-очередь'
+                : 'Firebase proposal возвращён в очередь');
+      },
+      error: (error: HttpErrorResponse) => { this.storagePending.set(false); this.setError(error); },
+    });
   }
 
   protected createRemoteProject(): void {

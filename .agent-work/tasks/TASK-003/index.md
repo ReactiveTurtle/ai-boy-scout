@@ -76,5 +76,7 @@ operations and merged pagination are implemented together.
 - ITR-027: implement confirmed-note reprocess with safe deletion of only an exclusive remote task.
 - ITR-028: expose remote retry, clarification, rejection review, requeue, restore and reprocess
   transitions through project-scoped localhost API routes.
-- next: wire these actions into the Firebase review panel, then list remote tasks/status and merge
-  the Firebase and SQLite workspaces before enabling per-project storage.
+- ITR-029: add consent-aware Firebase review controls for rejection requests, retry/clarification,
+  requeue, restore and reprocess to the remote note detail panel.
+- next: expose remote task browse/status, then merge Firebase/SQLite notes and tasks in their
+  existing workspaces before enabling per-project storage.

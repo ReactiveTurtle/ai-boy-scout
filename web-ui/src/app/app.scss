@@ -331,7 +331,8 @@ button:disabled { cursor: wait; opacity: .6; }
 .setup-heading h2 { margin: 0; font-size: 20px; }
 .setup-panel p { color: #485a78; line-height: 1.5; }
 .setup-panel label { display: grid; gap: 6px; margin-bottom: 12px; font-size: 13px; }
-.setup-panel input { width: 100%; padding: 9px; border: 1px solid #ccd9e9; border-radius: 6px; }
+.setup-panel input, .setup-panel textarea { width: 100%; padding: 9px; border: 1px solid #ccd9e9; border-radius: 6px; }
+.setup-panel textarea { min-height: 70px; resize: vertical; }
 .setup-panel button { padding: 8px 12px; border: 1px solid #a9c2e1; border-radius: 6px; background: #fff; cursor: pointer; }
 .setup-preview { margin-top: 16px; padding-top: 14px; border-top: 1px solid #ccd9e9; }
 .setup-preview code { word-break: break-all; }
@@ -340,6 +341,5 @@ button:disabled { cursor: wait; opacity: .6; }
 .setup-preview .setup-warning { color: #92501e; }
 .firebase-note-list { margin: 12px 0; display: grid; gap: 6px; }
 .firebase-note-row { display: grid; text-align: left; }
-.firebase-note-row.active { background: #edf4ff; border-color: #a8c9ff; }
 @media (max-width: 900px) { .setup-panel { margin: 12px; } }
 .storage-panel textarea { width: 100%; min-height: 100px; border: 1px solid var(--line); resize: vertical; }

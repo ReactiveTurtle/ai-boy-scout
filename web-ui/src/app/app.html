@@ -270,6 +270,52 @@
                           } @else if (!firebaseNotesLoading()) {
                             <p>Для этой заметки пока нет proposal.</p>
                           }
+                          @if (firebaseNoteIsActive(note) && firebaseAiReadConsentGranted()) {
+                            @if (!selectedFirebaseProposal() || ['ready', 'failed', 'unverified'].includes(selectedFirebaseProposal()!.state)) {
+                              <div class="firebase-proposal">
+                                <label>Причина для независимой проверки OpenCode
+                                  <textarea maxlength="2000" [value]="firebaseRejectionReason()" (input)="firebaseRejectionReason.set($any($event.target).value)" placeholder="Укажите проверяемую причину"></textarea>
+                                </label>
+                                <button type="button" [disabled]="storagePending() || !firebaseRejectionReason().trim()" (click)="submitFirebaseReviewTransition('rejection-review')">Запросить проверку отклонения</button>
+                              </div>
+                            }
+                            @if (selectedFirebaseProposal(); as proposal) {
+                              @if (['ready', 'failed', 'unverified'].includes(proposal.state)) {
+                                <div class="firebase-proposal">
+                                  <label>Комментарий для OpenCode
+                                    <textarea maxlength="2000" [value]="firebaseReviewComment()" (input)="firebaseReviewComment.set($any($event.target).value)" placeholder="Что проверить повторно? (обязательно)"></textarea>
+                                  </label>
+                                  <button type="button" [disabled]="storagePending() || !firebaseReviewComment().trim()" (click)="submitFirebaseReviewTransition('retry')">Повторить проверку</button>
+                                  <button type="button" [disabled]="storagePending() || !firebaseReviewComment().trim()" (click)="submitFirebaseReviewTransition('clarification')">Вернуть на уточнение</button>
+                                </div>
+                              } @else if (proposal.state === 'processing') {
+                                <div class="firebase-proposal">
+                                  <label>Комментарий для OpenCode
+                                    <textarea maxlength="2000" [value]="firebaseReviewComment()" (input)="firebaseReviewComment.set($any($event.target).value)" placeholder="Что проверить при повторной обработке? (обязательно)"></textarea>
+                                  </label>
+                                  <button type="button" [disabled]="storagePending() || !firebaseReviewComment().trim()" (click)="submitFirebaseReviewTransition('requeue')">Остановить и вернуть в очередь</button>
+                                </div>
+                              }
+                            }
+                          } @else if (firebaseNoteIsActive(note)) {
+                            <p>Чтобы отправлять эту заметку в обработку, сначала разрешите AI-чтение для привязанного проекта.</p>
+                          }
+                          @if (note.status === 'dismissed' && selectedFirebaseProposal()?.state === 'rejected') {
+                            <div class="firebase-proposal">
+                              <label>Комментарий при восстановлении
+                                <textarea maxlength="2000" [value]="firebaseReviewComment()" (input)="firebaseReviewComment.set($any($event.target).value)" placeholder="Почему заметку нужно проверить снова? (обязательно)"></textarea>
+                              </label>
+                              <button type="button" [disabled]="storagePending() || !firebaseAiReadConsentGranted() || !firebaseReviewComment().trim()" (click)="submitFirebaseReviewTransition('restore')">Восстановить заметку</button>
+                            </div>
+                          }
+                          @if (note.status === 'resolved' && (!selectedFirebaseProposal() || selectedFirebaseProposal()?.state === 'confirmed')) {
+                            <div class="firebase-proposal">
+                              <label>Комментарий при повторной обработке
+                                <textarea maxlength="2000" [value]="firebaseReviewComment()" (input)="firebaseReviewComment.set($any($event.target).value)" placeholder="Что нужно проверить заново? (обязательно)"></textarea>
+                              </label>
+                              <button type="button" [disabled]="storagePending() || !firebaseAiReadConsentGranted() || !firebaseReviewComment().trim()" (click)="submitFirebaseReviewTransition('reprocess')">Вернуть заметку в обработку</button>
+                            </div>
+                          }
                         </article>
                       }
                     }
