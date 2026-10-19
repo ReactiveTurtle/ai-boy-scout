@@ -67,5 +67,7 @@ operations and merged pagination are implemented together.
   proposal and note status together while preserving the rest of the project root.
 - ITR-023: expose bound Firebase note, proposal, and human confirmation operations through
   the localhost API without enabling per-project storage yet.
-- next: present Firebase notes and proposals in the review UI and expose the current/rejection
-  confirmation actions without mixing them into the SQLite list until paging is integrated.
+- ITR-024: provide a Firebase notes/proposals review panel with human confirm/reject actions,
+  separate from the existing SQLite history while mixed paging is not yet implemented.
+- next: add Firebase retry, clarification, restore, and reprocess transitions, then show remote
+  tasks and merge Firebase/SQLite records in their existing workspaces before enabling storage.

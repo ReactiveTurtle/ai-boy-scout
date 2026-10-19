@@ -338,5 +338,8 @@ button:disabled { cursor: wait; opacity: .6; }
 .setup-preview li { margin: 8px 0; }
 .setup-preview section { padding: 12px 0; border-top: 1px solid var(--line); }
 .setup-preview .setup-warning { color: #92501e; }
+.firebase-note-list { margin: 12px 0; display: grid; gap: 6px; }
+.firebase-note-row { display: grid; text-align: left; }
+.firebase-note-row.active { background: #edf4ff; border-color: #a8c9ff; }
 @media (max-width: 900px) { .setup-panel { margin: 12px; } }
 .storage-panel textarea { width: 100%; min-height: 100px; border: 1px solid var(--line); resize: vertical; }

@@ -148,6 +148,40 @@ interface StorageStatus {
 interface RemoteProject { id: number; name: string; }
 interface RemoteBinding { projectId: number; localPath: string; aiReadConsent: boolean; }
 interface FirebaseNoteTransferResult { localNoteId: string; firebaseNoteId: string; alreadyImported: boolean; }
+interface FirebaseRemoteNote {
+  id: string;
+  projectId: number;
+  originalPath: string;
+  title: string;
+  location: string | null;
+  observation: string;
+  impact: string | null;
+  suggestedAction: string | null;
+  discoveredDuring: string | null;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  sourceName: string;
+}
+interface FirebaseRemoteNotePage { items: FirebaseRemoteNote[]; nextCursor: string | null; }
+interface FirebaseProposalView {
+  reportId: string;
+  projectId: number;
+  state: string;
+  relevance: string | null;
+  recommendedAction: string | null;
+  title: string | null;
+  description: string | null;
+  acceptanceCriteria: string | null;
+  verificationSummary: string | null;
+  currentConsequences: string | null;
+  finalRejectionReason: string | null;
+  error: string | null;
+  attempts: number;
+  reviewIntent: string | null;
+  requestedRejectionReason: string | null;
+  requestedClarification: string | null;
+}
 
 interface TransferPreview {
   projectId: number;
@@ -236,6 +270,12 @@ export class App {
   protected readonly storagePending = signal(false);
   protected readonly remoteProjects = signal<RemoteProject[]>([]);
   protected readonly remoteBindings = signal<RemoteBinding[]>([]);
+  protected readonly firebaseNotes = signal<FirebaseRemoteNote[]>([]);
+  protected readonly firebaseNotesProjectId = signal<number | null>(null);
+  protected readonly firebaseNotesNextCursor = signal<string | null>(null);
+  protected readonly firebaseNotesLoading = signal(false);
+  protected readonly selectedFirebaseNote = signal<FirebaseRemoteNote | null>(null);
+  protected readonly selectedFirebaseProposal = signal<FirebaseProposalView | null>(null);
   protected readonly transferredNoteIds = signal<Record<string, string>>({});
   protected readonly remoteProjectName = signal('');
   protected readonly remotePaths = signal<Record<number, string>>({});
@@ -406,6 +446,90 @@ export class App {
       },
       error: (error: HttpErrorResponse) => { this.storagePending.set(false); this.setError(error); },
     });
+  }
+
+  protected firebaseBindingForSelectedProject(): RemoteBinding | null {
+    const path = this.selectedProject()?.primaryPath.replace(/[\\/]+$/, '').toLocaleLowerCase();
+    if (!path) return null;
+    return this.remoteBindings().find((binding) =>
+      binding.localPath.replace(/[\\/]+$/, '').toLocaleLowerCase() === path) ?? null;
+  }
+
+  protected loadFirebaseNotes(projectId: number, before: string | null = null): void {
+    if (this.firebaseNotesLoading()) return;
+    this.firebaseNotesLoading.set(true);
+    if (before === null) {
+      this.firebaseNotesProjectId.set(projectId);
+      this.firebaseNotes.set([]);
+      this.firebaseNotesNextCursor.set(null);
+      this.selectedFirebaseNote.set(null);
+      this.selectedFirebaseProposal.set(null);
+    }
+    let params = new HttpParams().set('limit', 40);
+    if (before) params = params.set('before', before);
+    this.http.get<FirebaseRemoteNotePage>(`/api/remote-projects/${projectId}/notes`, { params })
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (page) => {
+          this.firebaseNotes.set(before ? [...this.firebaseNotes(), ...page.items] : page.items);
+          this.firebaseNotesNextCursor.set(page.nextCursor);
+          this.firebaseNotesLoading.set(false);
+        },
+        error: (error: HttpErrorResponse) => { this.firebaseNotesLoading.set(false); this.setError(error); },
+      });
+  }
+
+  protected selectFirebaseNote(note: FirebaseRemoteNote): void {
+    const projectId = this.firebaseNotesProjectId();
+    if (!projectId) return;
+    this.selectedFirebaseNote.set(note);
+    this.selectedFirebaseProposal.set(null);
+    this.http.get<FirebaseProposalView | null>(`/api/remote-projects/${projectId}/notes/${encodeURIComponent(note.id)}/proposal`)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (proposal) => {
+          if (this.selectedFirebaseNote()?.id === note.id) this.selectedFirebaseProposal.set(proposal);
+        },
+        error: (error: HttpErrorResponse) => this.setError(error),
+      });
+  }
+
+  protected confirmFirebaseProposal(): void {
+    const projectId = this.firebaseNotesProjectId();
+    const note = this.selectedFirebaseNote();
+    const proposal = this.selectedFirebaseProposal();
+    if (!projectId || !note || proposal?.state !== 'ready' || proposal.recommendedAction !== 'create_task' || this.storagePending()) return;
+    this.storagePending.set(true);
+    this.http.post<WorkTask>(`/api/remote-projects/${projectId}/notes/${encodeURIComponent(note.id)}/confirm`, {})
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (task) => {
+          this.selectedFirebaseNote.update((current) => current ? { ...current, status: 'resolved' } : current);
+          this.selectedFirebaseProposal.update((current) => current ? { ...current, state: 'confirmed' } : current);
+          this.storagePending.set(false);
+          this.notice.set(`Задача ${task.id} подтверждена в Firebase`);
+        },
+        error: (error: HttpErrorResponse) => { this.storagePending.set(false); this.setError(error); },
+      });
+  }
+
+  protected confirmFirebaseRejection(): void {
+    const projectId = this.firebaseNotesProjectId();
+    const note = this.selectedFirebaseNote();
+    const proposal = this.selectedFirebaseProposal();
+    if (!projectId || !note || proposal?.state !== 'ready' || proposal.recommendedAction !== 'reject' || this.storagePending()) return;
+    this.storagePending.set(true);
+    this.http.post<FirebaseProposalView>(`/api/remote-projects/${projectId}/notes/${encodeURIComponent(note.id)}/confirm-rejection`, {})
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (rejected) => {
+          this.selectedFirebaseNote.update((current) => current ? { ...current, status: 'dismissed' } : current);
+          this.selectedFirebaseProposal.set(rejected);
+          this.storagePending.set(false);
+          this.notice.set(`Отклонение заметки ${note.id} подтверждено в Firebase`);
+        },
+        error: (error: HttpErrorResponse) => { this.storagePending.set(false); this.setError(error); },
+      });
   }
 
   protected createRemoteProject(): void {

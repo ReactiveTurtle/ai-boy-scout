@@ -215,6 +215,63 @@
                       <button type="button" [disabled]="storagePending()" (click)="setRemoteAiConsent(remote.id, !binding.aiReadConsent)">
                         {{ binding.aiReadConsent ? 'Запретить AI чтение' : 'Разрешить AI чтение на этой машине' }}
                       </button>
+                      @if (firebaseBindingForSelectedProject()?.projectId === remote.id) {
+                        <button type="button" [disabled]="firebaseNotesLoading()" (click)="loadFirebaseNotes(remote.id)">Открыть заметки Firebase</button>
+                      }
+                    }
+                  </section>
+                }
+                @if (firebaseBindingForSelectedProject(); as reviewBinding) {
+                  <section class="setup-preview firebase-review-panel">
+                    <h3>Заметки Firebase</h3>
+                    <p>Показываются только заметки привязанного общего проекта. История SQLite и связанные с заметкой задачи этим действием не перемещаются.</p>
+                    <button type="button" [disabled]="firebaseNotesLoading()" (click)="loadFirebaseNotes(reviewBinding.projectId)">
+                      {{ firebaseNotesProjectId() === reviewBinding.projectId ? 'Обновить список' : 'Загрузить список' }}
+                    </button>
+                    @if (firebaseNotesProjectId() === reviewBinding.projectId) {
+                      @if (firebaseNotesLoading()) { <p>Загружаем заметки Firebase…</p> }
+                      @else if (firebaseNotes().length === 0) { <p>В Firebase пока нет заметок.</p> }
+                      @else {
+                        <div class="firebase-note-list">
+                          @for (note of firebaseNotes(); track note.id) {
+                            <button class="firebase-note-row" [class.active]="selectedFirebaseNote()?.id === note.id" type="button" (click)="selectFirebaseNote(note)">
+                              <strong>{{ note.title }}</strong>
+                              <small>{{ note.id }} · {{ note.status }} · {{ note.sourceName }}</small>
+                            </button>
+                          }
+                        </div>
+                      }
+                      @if (firebaseNotesNextCursor()) {
+                        <button type="button" [disabled]="firebaseNotesLoading()" (click)="loadFirebaseNotes(reviewBinding.projectId, firebaseNotesNextCursor())">Загрузить ещё</button>
+                      }
+                      @if (selectedFirebaseNote(); as note) {
+                        <article class="firebase-note-detail">
+                          <h4>{{ note.title }}</h4>
+                          <p><strong>Наблюдение:</strong> {{ note.observation }}</p>
+                          @if (note.impact) { <p><strong>Влияние:</strong> {{ note.impact }}</p> }
+                          @if (note.suggestedAction) { <p><strong>Возможное действие:</strong> {{ note.suggestedAction }}</p> }
+                          @if (selectedFirebaseProposal(); as proposal) {
+                            <div class="firebase-proposal">
+                              <strong>Проверка OpenCode: {{ proposal.state }}</strong>
+                              @if (proposal.verificationSummary) { <p>{{ proposal.verificationSummary }}</p> }
+                              @if (proposal.state === 'ready' && proposal.recommendedAction === 'create_task') {
+                                <h5>{{ proposal.title }}</h5>
+                                @if (proposal.currentConsequences) { <p><strong>Последствия текущей логики:</strong> {{ proposal.currentConsequences }}</p> }
+                                <p>{{ proposal.description }}</p>
+                                <p><strong>Критерии готовности:</strong> {{ proposal.acceptanceCriteria }}</p>
+                                <button type="button" [disabled]="storagePending()" (click)="confirmFirebaseProposal()">Создать задачу в Firebase</button>
+                              } @else if (proposal.state === 'ready' && proposal.recommendedAction === 'reject') {
+                                <p><strong>Причина отклонения:</strong> {{ proposal.finalRejectionReason }}</p>
+                                <button type="button" [disabled]="storagePending()" (click)="confirmFirebaseRejection()">Подтвердить отклонение</button>
+                              } @else if (proposal.state === 'failed') {
+                                <p>{{ proposal.error }}</p>
+                              }
+                            </div>
+                          } @else if (!firebaseNotesLoading()) {
+                            <p>Для этой заметки пока нет proposal.</p>
+                          }
+                        </article>
+                      }
                     }
                   </section>
                 }
