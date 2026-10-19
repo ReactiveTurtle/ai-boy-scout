@@ -164,6 +164,21 @@ interface FirebaseRemoteNote {
   sourceName: string;
 }
 interface FirebaseRemoteNotePage { items: FirebaseRemoteNote[]; nextCursor: string | null; }
+interface FirebaseRemoteTask {
+  id: string;
+  projectId: number;
+  title: string;
+  description: string;
+  currentConsequences: string | null;
+  acceptanceCriteria: string;
+  status: 'todo' | 'done';
+  createdAt: string;
+  updatedAt: string;
+  sourceReportIds: string[];
+  confirmerName: string | null;
+  confirmerInstallationId: string | null;
+}
+interface FirebaseRemoteTaskPage { items: FirebaseRemoteTask[]; nextCursor: string | null; }
 interface FirebaseProposalView {
   reportId: string;
   projectId: number;
@@ -275,6 +290,10 @@ export class App {
   protected readonly firebaseNotesProjectId = signal<number | null>(null);
   protected readonly firebaseNotesNextCursor = signal<string | null>(null);
   protected readonly firebaseNotesLoading = signal(false);
+  protected readonly firebaseTasks = signal<FirebaseRemoteTask[]>([]);
+  protected readonly firebaseTasksProjectId = signal<number | null>(null);
+  protected readonly firebaseTasksNextCursor = signal<string | null>(null);
+  protected readonly firebaseTasksLoading = signal(false);
   protected readonly selectedFirebaseNote = signal<FirebaseRemoteNote | null>(null);
   protected readonly selectedFirebaseProposal = signal<FirebaseProposalView | null>(null);
   protected readonly firebaseRejectionReason = signal('');
@@ -482,6 +501,45 @@ export class App {
       });
   }
 
+  protected loadFirebaseTasks(projectId: number, before: string | null = null): void {
+    if (this.firebaseTasksLoading()) return;
+    this.firebaseTasksLoading.set(true);
+    if (before === null) {
+      this.firebaseTasksProjectId.set(projectId);
+      this.firebaseTasks.set([]);
+      this.firebaseTasksNextCursor.set(null);
+    }
+    let params = new HttpParams().set('limit', 40);
+    if (before) params = params.set('before', before);
+    this.http.get<FirebaseRemoteTaskPage>(`/api/remote-projects/${projectId}/tasks`, { params })
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (page) => {
+          this.firebaseTasks.set(before ? [...this.firebaseTasks(), ...page.items] : page.items);
+          this.firebaseTasksNextCursor.set(page.nextCursor);
+          this.firebaseTasksLoading.set(false);
+        },
+        error: (error: HttpErrorResponse) => { this.firebaseTasksLoading.set(false); this.setError(error); },
+      });
+  }
+
+  protected updateFirebaseTaskStatus(task: FirebaseRemoteTask): void {
+    const projectId = this.firebaseTasksProjectId();
+    if (!projectId || this.storagePending()) return;
+    const status = task.status === 'todo' ? 'done' : 'todo';
+    this.storagePending.set(true);
+    this.http.patch<FirebaseRemoteTask>(`/api/remote-projects/${projectId}/tasks/${encodeURIComponent(task.id)}/status`, { status })
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (updated) => {
+          this.firebaseTasks.update((tasks) => tasks.map((item) => item.id === updated.id ? updated : item));
+          this.storagePending.set(false);
+          this.notice.set(status === 'done' ? 'Firebase-задача выполнена' : 'Firebase-задача возвращена в работу');
+        },
+        error: (error: HttpErrorResponse) => { this.storagePending.set(false); this.setError(error); },
+      });
+  }
+
   protected selectFirebaseNote(note: FirebaseRemoteNote): void {
     const projectId = this.firebaseNotesProjectId();
     if (!projectId) return;
@@ -513,6 +571,8 @@ export class App {
           this.selectedFirebaseProposal.update((current) => current ? { ...current, state: 'confirmed' } : current);
           this.storagePending.set(false);
           this.notice.set(`Задача ${task.id} подтверждена в Firebase`);
+          const projectId = this.firebaseNotesProjectId();
+          if (projectId) this.loadFirebaseTasks(projectId);
         },
         error: (error: HttpErrorResponse) => { this.storagePending.set(false); this.setError(error); },
       });

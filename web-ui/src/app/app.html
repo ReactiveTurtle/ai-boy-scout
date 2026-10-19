@@ -220,6 +220,37 @@
                       }
                     }
                   </section>
+                  @if (firebaseBindingForSelectedProject()?.projectId === remote.id) {
+                    <section class="setup-preview firebase-task-panel">
+                      <h3>Задачи Firebase</h3>
+                      <p>Эти задачи хранятся в общем Firebase-проекте и не изменяют локальную SQLite.</p>
+                      <button type="button" [disabled]="firebaseTasksLoading()" (click)="loadFirebaseTasks(remote.id)">
+                        {{ firebaseTasksProjectId() === remote.id ? 'Обновить задачи' : 'Загрузить задачи' }}
+                      </button>
+                      @if (firebaseTasksProjectId() === remote.id) {
+                        @if (firebaseTasksLoading()) { <p>Загружаем задачи Firebase…</p> }
+                        @else if (firebaseTasks().length === 0) { <p>В Firebase пока нет задач.</p> }
+                        @else {
+                          <div class="firebase-task-list">
+                            @for (task of firebaseTasks(); track task.id) {
+                              <article class="firebase-task-row">
+                                <div><strong>{{ task.title }}</strong><small>{{ task.id }} · {{ task.status === 'done' ? 'Выполнена' : 'К выполнению' }}</small></div>
+                                <p>{{ task.description }}</p>
+                                @if (task.currentConsequences) { <p><strong>Последствия:</strong> {{ task.currentConsequences }}</p> }
+                                <small>Источники: {{ task.sourceReportIds.join(', ') }}@if (task.confirmerName) { · Подтвердил: {{ task.confirmerName }} }</small>
+                                <button type="button" [disabled]="storagePending()" (click)="updateFirebaseTaskStatus(task)">
+                                  {{ task.status === 'done' ? 'Вернуть в работу' : 'Отметить выполненной' }}
+                                </button>
+                              </article>
+                            }
+                          </div>
+                        }
+                        @if (firebaseTasksNextCursor()) {
+                          <button type="button" [disabled]="firebaseTasksLoading()" (click)="loadFirebaseTasks(remote.id, firebaseTasksNextCursor())">Загрузить ещё</button>
+                        }
+                      }
+                    </section>
+                  }
                 }
                 @if (firebaseBindingForSelectedProject(); as reviewBinding) {
                   <section class="setup-preview firebase-review-panel">
