@@ -33,6 +33,19 @@ public sealed class FirebaseReportRepository(FirebaseRealtimeDatabaseTransport t
         return project;
     }
 
+    public async Task<bool> VerifyProjectWriteAccessAsync(long projectId, CancellationToken cancellationToken = default)
+    {
+        if (projectId <= 0) throw new ArgumentOutOfRangeException(nameof(projectId));
+        var path = ProjectPath(projectId);
+        for (var attempt = 0; attempt < MaxAttempts; attempt++)
+        {
+            var snapshot = await transport.GetAsync(path, cancellationToken);
+            if (snapshot.Json.Trim() == "null") return false;
+            if (await transport.PutIfMatchAsync(path, snapshot.Json, snapshot.ETag, cancellationToken)) return true;
+        }
+        return false;
+    }
+
     public async Task<IReadOnlyList<FirebaseReportProject>> ListProjectsAsync(CancellationToken cancellationToken = default)
     {
         var json = await transport.GetShallowAsync("report-projects", cancellationToken);

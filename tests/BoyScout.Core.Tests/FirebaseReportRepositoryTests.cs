@@ -35,6 +35,39 @@ public sealed class FirebaseReportRepositoryTests
     }
 
     [Fact]
+    public async Task Write_access_probe_puts_the_exact_existing_project_document()
+    {
+        using var server = new Server();
+        var repository = Repository(server);
+        var project = await repository.CreateProjectAsync("Probe", TestContext.Current.CancellationToken);
+        var path = $"report-projects/{project.Id}";
+        var before = server.Read(path);
+        var writes = server.ProjectWrites;
+
+        Assert.True(await repository.VerifyProjectWriteAccessAsync(project.Id, TestContext.Current.CancellationToken));
+
+        Assert.Equal(before, server.Read(path));
+        Assert.Equal(writes + 1, server.ProjectWrites);
+    }
+
+    [Fact]
+    public async Task Write_access_probe_retries_etag_conflict_without_changing_project_data()
+    {
+        using var server = new Server();
+        var repository = Repository(server);
+        var project = await repository.CreateProjectAsync("Probe", TestContext.Current.CancellationToken);
+        var path = $"report-projects/{project.Id}";
+        var before = server.Read(path);
+        var writes = server.ProjectWrites;
+        server.ConflictNextProjectPut = true;
+
+        Assert.True(await repository.VerifyProjectWriteAccessAsync(project.Id, TestContext.Current.CancellationToken));
+
+        Assert.Equal(before, server.Read(path));
+        Assert.Equal(writes + 2, server.ProjectWrites);
+    }
+
+    [Fact]
     public async Task Import_preserves_note_and_is_idempotent_after_a_project_conflict()
     {
         using var server = new Server();

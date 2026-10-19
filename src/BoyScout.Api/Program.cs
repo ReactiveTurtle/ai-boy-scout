@@ -959,6 +959,16 @@ static async Task<FirebaseWriteActivationPreview> BuildFirebaseWriteActivationPr
     var remoteReports = new FirebaseReportRepository(transport, new FirebaseSequenceAllocator(transport));
     var firebaseProject = await remoteReports.GetProjectAsync(remoteProjectId, cancellationToken)
         ?? throw new KeyNotFoundException("The bound Firebase project no longer exists.");
+    bool writeAccess;
+    try
+    {
+        writeAccess = await remoteReports.VerifyProjectWriteAccessAsync(remoteProjectId, cancellationToken);
+    }
+    catch (HttpRequestException exception) when (exception.Message.Contains("HTTP 401", StringComparison.Ordinal) ||
+                                                  exception.Message.Contains("HTTP 403", StringComparison.Ordinal))
+    {
+        writeAccess = false;
+    }
 
     long firebaseNotes = 0;
     string? noteCursor = null;
@@ -979,20 +989,21 @@ static async Task<FirebaseWriteActivationPreview> BuildFirebaseWriteActivationPr
         taskCursor = page.NextCursor;
     } while (taskCursor is not null);
 
-    var ready = binding.AiReadConsent && Directory.Exists(binding.LocalPath) && worker.Available;
-    var reason = !Directory.Exists(binding.LocalPath) ? "The bound local directory is unavailable."
+    var ready = writeAccess && binding.AiReadConsent && Directory.Exists(binding.LocalPath) && worker.Available;
+    var reason = !writeAccess ? "Firebase did not confirm conditional write access for this project."
+        : !Directory.Exists(binding.LocalPath) ? "The bound local directory is unavailable."
         : !binding.AiReadConsent ? "Grant AI read consent for the bound project before activation."
         : !worker.Available ? "OpenCode background processing is disabled by environment configuration."
         : null;
     var installation = service.LoadStatus();
     var fingerprint = string.Join("\0", installation.InstallationId.ToString("D"), remoteProjectId.ToString(System.Globalization.CultureInfo.InvariantCulture),
         firebaseProject.Name, binding.LocalPath, binding.AiReadConsent.ToString(), worker.Available.ToString(),
-        worker.Enabled.ToString(), localSnapshot.Sha256, firebaseNotes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        worker.Enabled.ToString(), writeAccess.ToString(), localSnapshot.Sha256, firebaseNotes.ToString(System.Globalization.CultureInfo.InvariantCulture),
         firebaseTasks.ToString(System.Globalization.CultureInfo.InvariantCulture));
     var token = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprint)));
     return new FirebaseWriteActivationPreview(remoteProjectId, firebaseProject.Name, binding.LocalPath,
         localSnapshot.Counts.Reports, localSnapshot.Counts.Tasks, localSnapshot.Sha256,
-        firebaseNotes, firebaseTasks, binding.FirebaseWriteEnabled, binding.AiReadConsent,
+        firebaseNotes, firebaseTasks, writeAccess, binding.FirebaseWriteEnabled, binding.AiReadConsent,
         worker.Available, worker.Enabled, ready, reason, token);
 }
 
@@ -1012,7 +1023,7 @@ internal sealed record FirebaseWriteConfirmationRequest(string? Token);
 
 internal sealed record FirebaseWriteActivationPreview(long ProjectId, string ProjectName, string LocalPath,
     int LocalNotes, int LocalTasks, string LocalSha256, long FirebaseNotes, long FirebaseTasks,
-    bool AiReadConsent, bool WorkerAvailable, bool WorkerEnabled, bool AlreadyEnabled,
+    bool FirebaseWriteAccess, bool AlreadyEnabled, bool AiReadConsent, bool WorkerAvailable, bool WorkerEnabled,
     bool ReadyToEnable, string? BlockingReason, string Token);
 
 internal sealed record ProjectAiAccessUpdate(bool Granted);
