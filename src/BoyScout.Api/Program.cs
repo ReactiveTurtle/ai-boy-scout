@@ -386,6 +386,42 @@ app.MapPost("/api/remote-projects/{projectId:long}/notes/{noteId}/reprocess", as
     catch (InvalidOperationException exception) { return Results.Conflict(new { error = exception.Message }); }
     catch (HttpRequestException) { return Results.Problem("Could not reprocess the Firebase note.", statusCode: StatusCodes.Status502BadGateway); }
 });
+app.MapGet("/api/remote-projects/{projectId:long}/tasks", async Task<IResult> (
+    BoyScoutConfigService service, long projectId, string? before, int limit = 40, CancellationToken token = default) =>
+{
+    if (ValidateFirebaseProjectBinding(service, projectId) is { } scopeError) return scopeError;
+    try
+    {
+        using var transport = new FirebaseRealtimeDatabaseTransport(service.LoadConfiguredFirebaseConnection());
+        var reports = new FirebaseReportRepository(transport, new FirebaseSequenceAllocator(transport));
+        if (await reports.GetProjectAsync(projectId, token) is null) return Results.NotFound();
+        return Results.Ok(await new FirebaseTaskRepository(transport).BrowseTasksAsync(projectId, before, limit, token));
+    }
+    catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (InvalidOperationException exception) when (exception.Message == "Configure Firebase credentials first.")
+    { return Results.Conflict(new { error = exception.Message }); }
+    catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException)
+    { return Results.Problem("Could not read Firebase tasks.", statusCode: StatusCodes.Status502BadGateway); }
+});
+app.MapPatch("/api/remote-projects/{projectId:long}/tasks/{taskId}/status", async Task<IResult> (
+    BoyScoutConfigService service, long projectId, string taskId, TaskStatusUpdate request, CancellationToken token) =>
+{
+    if (ValidateFirebaseProjectBinding(service, projectId) is { } scopeError) return scopeError;
+    if (!taskId.StartsWith($"BST-BSR-{projectId}-", StringComparison.Ordinal))
+        return Results.BadRequest(new { error = "Task ID does not belong to the selected Firebase project." });
+    try
+    {
+        using var transport = new FirebaseRealtimeDatabaseTransport(service.LoadConfiguredFirebaseConnection());
+        var task = await new FirebaseTaskRepository(transport).UpdateTaskStatusAsync(taskId,
+            request.Status ?? string.Empty, token);
+        return task is null ? Results.NotFound() : Results.Ok(task);
+    }
+    catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (InvalidOperationException exception) when (exception.Message == "Configure Firebase credentials first.")
+    { return Results.Conflict(new { error = exception.Message }); }
+    catch (InvalidOperationException exception) { return Results.Conflict(new { error = exception.Message }); }
+    catch (HttpRequestException) { return Results.Problem("Could not update the Firebase task.", statusCode: StatusCodes.Status502BadGateway); }
+});
 app.MapGet("/api/automation", (AiProcessingControl control) => Results.Ok(control.Status));
 app.MapPatch(
     "/api/automation",
@@ -854,6 +890,14 @@ static IResult? ValidateFirebaseReviewScope(BoyScoutConfigService service, long 
     if (requireAiConsent && !binding.AiReadConsent)
         return Results.Conflict(new { error = "Grant AI read consent for the bound project before queueing work." });
     return null;
+}
+
+static IResult? ValidateFirebaseProjectBinding(BoyScoutConfigService service, long projectId)
+{
+    if (projectId <= 0) return Results.BadRequest(new { error = "Project ID must be positive." });
+    return service.ResolveByProjectId(projectId) is null
+        ? Results.Conflict(new { error = "Bind the Firebase project to a local path first." })
+        : null;
 }
 
 internal sealed record TaskStatusUpdate(string? Status);

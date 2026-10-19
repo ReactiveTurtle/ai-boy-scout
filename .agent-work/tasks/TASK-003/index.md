@@ -79,5 +79,6 @@ operations and merged pagination are implemented together.
 - ITR-029: add consent-aware Firebase review controls for rejection requests, retry/clarification,
   requeue, restore and reprocess to the remote note detail panel.
 - ITR-030: browse Firebase tasks and update their status atomically in the remote project root.
-- next: expose remote task browse/status in the UI and merge remote/local notes and tasks before
-  enabling per-project storage.
+- ITR-031: expose remote task browse and status updates through the bound-project localhost API.
+- next: show remote tasks in the project review panel, then merge Firebase/SQLite notes and tasks
+  in the existing workspaces before enabling per-project storage.
