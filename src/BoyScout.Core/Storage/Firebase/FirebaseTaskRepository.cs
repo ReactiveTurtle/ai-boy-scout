@@ -676,6 +676,48 @@ public sealed class FirebaseTaskRepository(FirebaseRealtimeDatabaseTransport tra
         return task;
     }
 
+    public async Task<BoyScoutTask?> UpdateTaskStatusAsync(string taskId, string status,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TaskStatuses.IsValid(status)) throw new ArgumentException($"Unsupported task status: {status}.", nameof(status));
+        if (taskId is null || !taskId.StartsWith("BST-", StringComparison.Ordinal))
+            throw new ArgumentException("Invalid Firebase task ID.", nameof(taskId));
+        var reportId = taskId[4..];
+        var projectId = ParseProjectId(reportId);
+        if (TaskId(reportId) != taskId) throw new ArgumentException("Invalid Firebase task ID.", nameof(taskId));
+        var path = ProjectPath(projectId);
+        for (var attempt = 0; attempt < MaxAttempts; attempt++)
+        {
+            var snapshot = await transport.GetAsync(path, cancellationToken);
+            var root = ReadProject(snapshot.Json, projectId);
+            var tasks = GetCollection(root, "Tasks");
+            if (!tasks.TryGetPropertyValue(taskId, out var value)) return null;
+            if (value is not JsonObject node || !HasText(node, "Id", taskId) || !HasLong(node, "ProjectId", projectId) ||
+                !HasText(node, "Title") || !HasText(node, "Description") || !HasText(node, "AcceptanceCriteria") ||
+                !HasText(node, "Status") || !TaskStatuses.IsValid((string)node["Status"]!) ||
+                !HasText(node, "CreatedAt") || !HasText(node, "UpdatedAt") ||
+                node["SourceReportIds"] is not JsonArray sources || sources.Count == 0)
+                throw InvalidData();
+            BoyScoutTask task;
+            try { task = node.Deserialize<BoyScoutTask>() ?? throw InvalidData(); }
+            catch (JsonException) { throw InvalidData(); }
+            try
+            {
+                if (task.SourceReportIds is null || !task.SourceReportIds.Contains(reportId) ||
+                    task.SourceReportIds.Any(sourceId => ParseProjectId(sourceId) != projectId)) throw InvalidData();
+            }
+            catch (ArgumentException) { throw InvalidData(); }
+
+            var updatedAt = Timestamp();
+            node["Status"] = status;
+            node["UpdatedAt"] = updatedAt;
+            root["Tasks"] = tasks;
+            if (await transport.PutIfMatchAsync(path, root.ToJsonString(), snapshot.ETag, cancellationToken))
+                return task with { Status = status, UpdatedAt = updatedAt };
+        }
+        throw new InvalidOperationException("Project remained contended; task status was not updated.");
+    }
+
     // Project-scoped key paging only; status/search filters and a total count require a different index.
     public async Task<FirebaseTaskPage> BrowseTasksAsync(long projectId, string? before, int limit,
         CancellationToken cancellationToken = default)

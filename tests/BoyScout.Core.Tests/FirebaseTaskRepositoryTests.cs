@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json.Nodes;
 using BoyScout.Core.Storage.Config;
 using BoyScout.Core.Storage.Firebase;
+using BoyScout.Core.Tasks;
 using Xunit;
 
 namespace BoyScout.Core.Tests;
@@ -528,6 +529,47 @@ public sealed class FirebaseTaskRepositoryTests
                 "revisit", TestContext.Current.CancellationToken));
             Assert.Equal(writes, server.Writes);
         }
+    }
+
+    [Fact]
+    public async Task Update_task_status_retries_project_conflict_and_preserves_links_and_other_data()
+    {
+        using var server = new Server();
+        var repo = Repository(server);
+        SetReadyProposal(server, "ready");
+        var task = await repo.ConfirmProposalAsync(Id, Installation, "name", TestContext.Current.CancellationToken);
+        var root = server.Root;
+        root["Tasks"]![task.Id]!["Extra"] = "task-extra";
+        server.Root = root;
+        server.ConflictNext = true;
+        var writes = server.Writes;
+
+        var updated = await repo.UpdateTaskStatusAsync(task.Id, TaskStatuses.Done, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(updated);
+        Assert.Equal(TaskStatuses.Done, updated.Status);
+        Assert.NotEqual(task.UpdatedAt, updated.UpdatedAt);
+        Assert.Equal(new[] { Id }, updated.SourceReportIds);
+        Assert.Equal("task-extra", server.Root["Tasks"]![task.Id]!["Extra"]!.GetValue<string>());
+        Assert.Equal("resolved", server.Root["Notes"]![Id]!["Status"]!.GetValue<string>());
+        Assert.Equal("confirmed", server.Root["TaskProposals"]![Id]!["State"]!.GetValue<string>());
+        Assert.Equal("meta", server.Root["Metadata"]!["Custom"]!.GetValue<string>());
+        Assert.Equal(writes + 2, server.Writes);
+    }
+
+    [Fact]
+    public async Task Update_task_status_refuses_invalid_status_and_returns_null_for_missing_task()
+    {
+        using var server = new Server();
+        var repo = Repository(server);
+        var writes = server.Writes;
+        await Assert.ThrowsAsync<ArgumentException>(() => repo.UpdateTaskStatusAsync("BST-" + Id, "invalid",
+            TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ArgumentException>(() => repo.UpdateTaskStatusAsync("BST-not-a-report", TaskStatuses.Done,
+            TestContext.Current.CancellationToken));
+        Assert.Null(await repo.UpdateTaskStatusAsync("BST-BSR-1-0000000000000000002", TaskStatuses.Done,
+            TestContext.Current.CancellationToken));
+        Assert.Equal(writes, server.Writes);
     }
 
     [Fact]
