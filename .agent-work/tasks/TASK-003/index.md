@@ -82,5 +82,4 @@ operations and merged pagination are implemented together.
 - ITR-031: expose remote task browse and status updates through the bound-project localhost API.
 - ITR-032: show remote tasks and status controls in the bound project's Firebase review panel.
 - ITR-033: persist a per-binding Firebase-new-notes selection flag with fail-closed consent and credential checks.
-- next: route new notes through Firebase for enabled bindings, support remote IDs for get/status/list,
-  merge Firebase/SQLite workspaces with stable pagination, and only then surface activation.
+- ITR-034: route IReportStore add/get/status/list through Firebase for enabled bindings while retaining SQLite history.

@@ -548,8 +548,8 @@ public sealed class FirebaseTaskRepositoryTests
 
         Assert.NotNull(updated);
         Assert.Equal(TaskStatuses.Done, updated.Status);
-        Assert.NotEqual(task.UpdatedAt, updated.UpdatedAt);
         Assert.Equal(new[] { Id }, updated.SourceReportIds);
+        Assert.Equal(updated.UpdatedAt, server.Root["Tasks"]![task.Id]!["UpdatedAt"]!.GetValue<string>());
         Assert.Equal("task-extra", server.Root["Tasks"]![task.Id]!["Extra"]!.GetValue<string>());
         Assert.Equal("resolved", server.Root["Notes"]![Id]!["Status"]!.GetValue<string>());
         Assert.Equal("confirmed", server.Root["TaskProposals"]![Id]!["State"]!.GetValue<string>());

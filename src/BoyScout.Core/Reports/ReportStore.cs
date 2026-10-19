@@ -1,12 +1,27 @@
 using System.Globalization;
 using BoyScout.Core.Storage;
 using BoyScout.Core.Storage.Config;
+using BoyScout.Core.Storage.Firebase;
 using Microsoft.Data.Sqlite;
 
 namespace BoyScout.Core.Reports;
 
-public sealed class ReportStore(BoyScoutDatabase database, BoyScoutConfigService? config = null) : IReportStore
+public sealed class ReportStore : IReportStore
 {
+    private readonly BoyScoutDatabase database;
+    private readonly BoyScoutConfigService? config;
+    private readonly Func<FirebaseConnection, FirebaseRealtimeDatabaseTransport> transportFactory;
+
+    public ReportStore(
+        BoyScoutDatabase database,
+        BoyScoutConfigService? config = null,
+        Func<FirebaseConnection, FirebaseRealtimeDatabaseTransport>? transportFactory = null)
+    {
+        this.database = database;
+        this.config = config;
+        this.transportFactory = transportFactory ?? (connection => new FirebaseRealtimeDatabaseTransport(connection));
+    }
+
     public ReportPage Browse(
         long? projectId,
         string? status,
@@ -307,6 +322,17 @@ public sealed class ReportStore(BoyScoutDatabase database, BoyScoutConfigService
         ValidateOptional(request.DiscoveredDuring, nameof(request.DiscoveredDuring));
 
         var projectPath = ProjectPathNormalizer.Normalize(request.Project);
+        var binding = config?.ResolveByPath(projectPath);
+        if (binding?.FirebaseWriteEnabled == true)
+        {
+            var remoteSource = config!.LoadStatus();
+            using var repository = CreateFirebaseRepository();
+            var note = repository.Repository.AddNoteAsync(
+                binding.ProjectId, request with { Project = projectPath }, remoteSource.InstallationId, remoteSource.DisplayName)
+                .GetAwaiter().GetResult();
+            return MapFirebaseReport(note, LocalProjectId(projectPath));
+        }
+
         var timestamp = UtcTimestamp();
 
         using var connection = database.OpenConnection();
@@ -406,17 +432,74 @@ public sealed class ReportStore(BoyScoutDatabase database, BoyScoutConfigService
         command.Parameters.AddWithValue("$limit", limit);
 
         var reports = new List<BoyScoutReport>();
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
+        using (var reader = command.ExecuteReader())
         {
-            reports.Add(MapReport(reader));
+            while (reader.Read())
+            {
+                reports.Add(MapReport(reader));
+            }
         }
 
-        return reports;
+        if (config is null)
+        {
+            return reports;
+        }
+
+        var localPath = project is null ? null : ProjectPathNormalizer.Normalize(project);
+        var enabledBindings = config.ListBindings().Where(binding => binding.FirebaseWriteEnabled &&
+            (localPath is null || PathsEqual(binding.LocalPath, localPath))).ToArray();
+        if (enabledBindings.Length == 0)
+        {
+            return reports;
+        }
+
+        using var repository = CreateFirebaseRepository();
+        var firebaseReports = new List<BoyScoutReport>();
+
+        foreach (var binding in enabledBindings)
+        {
+            string? cursor = null;
+            var addedForBinding = 0;
+            do
+            {
+                var page = repository.Repository.BrowseNotesAsync(binding.ProjectId, cursor, Math.Min(100, limit), CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                foreach (var note in page.Items)
+                {
+                    if (status is null || note.Status == status)
+                    {
+                        firebaseReports.Add(MapFirebaseReport(note, LocalProjectId(note.OriginalPath)));
+                        addedForBinding++;
+                    }
+                }
+
+                cursor = page.NextCursor;
+            } while (cursor is not null && addedForBinding < limit);
+        }
+
+        return reports.Concat(firebaseReports)
+            .OrderByDescending(report => report.CreatedAt, StringComparer.Ordinal)
+            .ThenByDescending(report => report.Id, StringComparer.Ordinal)
+            .Take(limit)
+            .ToArray();
     }
 
     public BoyScoutReport? Get(string id)
     {
+        if (LooksLikeRemoteId(id))
+        {
+            var remoteProjectId = ParseRemoteProjectId(id);
+            var binding = config?.ResolveByProjectId(remoteProjectId);
+            if (binding is null)
+            {
+                throw new ArgumentException($"Remote project {remoteProjectId} is not locally bound.", nameof(id));
+            }
+
+            using var repository = CreateFirebaseRepository();
+            var note = repository.Repository.GetNoteAsync(id).GetAwaiter().GetResult();
+            return note is null ? null : MapFirebaseReport(note, LocalProjectId(note.OriginalPath));
+        }
+
         var sequence = ParseId(id);
         using var connection = database.OpenConnection();
         return GetBySequence(connection, sequence);
@@ -427,6 +510,19 @@ public sealed class ReportStore(BoyScoutDatabase database, BoyScoutConfigService
         if (!ReportStatuses.IsValid(status))
         {
             throw new ArgumentException($"Unsupported report status: {status}.", nameof(status));
+        }
+
+        if (LooksLikeRemoteId(id))
+        {
+            var remoteProjectId = ParseRemoteProjectId(id);
+            if (config?.ResolveByProjectId(remoteProjectId) is null)
+            {
+                throw new ArgumentException($"Remote project {remoteProjectId} is not locally bound.", nameof(id));
+            }
+
+            using var repository = CreateFirebaseRepository();
+            var note = repository.Repository.UpdateNoteStatusAsync(id, status).GetAwaiter().GetResult();
+            return note is null ? null : MapFirebaseReport(note, LocalProjectId(note.OriginalPath));
         }
 
         var sequence = ParseId(id);
@@ -496,6 +592,57 @@ public sealed class ReportStore(BoyScoutDatabase database, BoyScoutConfigService
         pathCommand.ExecuteNonQuery();
 
         return projectId;
+    }
+
+    private FirebaseRepositoryHandle CreateFirebaseRepository()
+    {
+        var connection = (config ?? throw new InvalidOperationException("Firebase configuration is unavailable."))
+            .LoadConfiguredFirebaseConnection();
+        var transport = transportFactory(connection);
+        return new FirebaseRepositoryHandle(transport,
+            new FirebaseReportRepository(transport, new FirebaseSequenceAllocator(transport)));
+    }
+
+    private long? LocalProjectId(string localPath)
+    {
+        using var connection = database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = OperatingSystem.IsWindows()
+            ? "SELECT project_id FROM project_paths WHERE path = $path COLLATE NOCASE;"
+            : "SELECT project_id FROM project_paths WHERE path = $path COLLATE BINARY;";
+        command.Parameters.AddWithValue("$path", ProjectPathNormalizer.Normalize(localPath));
+        var result = command.ExecuteScalar();
+        return result is null ? null : Convert.ToInt64(result, CultureInfo.InvariantCulture);
+    }
+
+    private static bool PathsEqual(string first, string second) =>
+        string.Equals(first, second, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    private static BoyScoutReport MapFirebaseReport(FirebaseReportNote note, long? localProjectId) =>
+        new(note.Id, note.OriginalPath, note.Title, note.Location, note.Observation, note.Impact,
+            note.SuggestedAction, note.DiscoveredDuring, note.Status, note.CreatedAt, note.UpdatedAt,
+            note.SourceName, note.SourceInstallationId, localProjectId);
+
+    private static bool LooksLikeRemoteId(string id) =>
+        id is not null && id.StartsWith("BSR-", StringComparison.Ordinal) && id.IndexOf('-', 4) >= 0;
+
+    private static long ParseRemoteProjectId(string id)
+    {
+        var parts = id.Split('-');
+        if (parts.Length != 3 || !long.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var projectId) ||
+            projectId <= 0 || !long.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out var sequence) || sequence <= 0 ||
+            parts[2].Length != 19 || id != $"BSR-{projectId.ToString(CultureInfo.InvariantCulture)}-{sequence:D19}")
+        {
+            throw new ArgumentException($"Invalid remote Boy Scout report ID: {id}", nameof(id));
+        }
+
+        return projectId;
+    }
+
+    private sealed class FirebaseRepositoryHandle(FirebaseRealtimeDatabaseTransport transport, FirebaseReportRepository repository) : IDisposable
+    {
+        public FirebaseReportRepository Repository { get; } = repository;
+        public void Dispose() => transport.Dispose();
     }
 
     private static BoyScoutReport? GetBySequence(SqliteConnection connection, long sequence)
