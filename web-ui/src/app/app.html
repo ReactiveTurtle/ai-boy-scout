@@ -216,7 +216,7 @@
                         {{ binding.aiReadConsent ? 'Запретить AI чтение' : 'Разрешить AI чтение на этой машине' }}
                       </button>
                       @if (binding.firebaseWriteEnabled) {
-                        <p class="storage-status">Новые MCP/API-заметки сохраняются в Firebase. Существующая история остаётся в SQLite.</p>
+                        <p class="storage-status">Новые заметки из MCP сохраняются в Firebase. Существующая история остаётся в SQLite.</p>
                       } @else {
                         <button type="button" [disabled]="storagePending()" (click)="previewFirebaseActivation(remote.id)">
                           {{ firebaseActivationPending() === 'preview' ? 'Этап 1/2: проверяем Firebase и сверяем данные…' : 'Этап 1/2: проверить проект перед включением' }}
