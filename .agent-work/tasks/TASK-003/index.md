@@ -59,5 +59,7 @@ operations and merged pagination are implemented together.
 - ITR-019: persist the worker's ready, rejection, unverified, and failure outcomes under
   the current Firebase note lease. Firebase activation remains disabled until queueing,
   human review, and the production worker are connected.
-- next: discover and atomically claim eligible Firebase notes into a `processing` proposal,
-  respecting the selected local project binding and AI-read consent before invoking OpenCode.
+- ITR-020: discover and atomically claim eligible Firebase notes into a `processing`
+  proposal, respecting the selected local project binding and AI-read consent before invoking OpenCode.
+- next: connect claimed Firebase proposals to the existing OpenCode generator, renew leases
+  for long runs, and persist outcomes through the lease-fenced FirebaseTaskRepository methods.

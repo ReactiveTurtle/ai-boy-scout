@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using BoyScout.Core.Reports;
+using BoyScout.Core.Storage.Config;
 using BoyScout.Core.Tasks;
 
 namespace BoyScout.Core.Storage.Firebase;
@@ -18,11 +19,95 @@ public sealed record FirebaseTaskProposal(
     string? LocalizedReportImpact = null, string? LocalizedReportSuggestedAction = null);
 
 public sealed record FirebaseTaskPage(IReadOnlyList<BoyScoutTask> Items, string? NextCursor);
+public sealed record FirebaseTaskClaim(JsonObject Note, FirebaseTaskProposal Proposal, FirebaseProjectLeaseHandle Lease);
 
 // Standalone workflow: neither task creation nor API integration happens without explicit confirmation.
 public sealed class FirebaseTaskRepository(FirebaseRealtimeDatabaseTransport transport)
 {
     private const int MaxAttempts = 5;
+
+    public async Task<FirebaseTaskClaim?> ClaimNextEligibleNoteAsync(ProjectBinding binding,
+        string workerInstallationId, string workerName, TimeSpan leaseDuration,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        ArgumentNullException.ThrowIfNull(transport);
+        if (!binding.AiReadConsent || !Directory.Exists(binding.LocalPath)) return null;
+        Required(workerInstallationId, nameof(workerInstallationId));
+        Required(workerName, nameof(workerName));
+        var localPath = ProjectPathNormalizer.Normalize(binding.LocalPath);
+        var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var projectId = binding.ProjectId;
+        if (projectId <= 0) return null;
+        var path = ProjectPath(projectId);
+        var lease = new FirebaseProjectLease(transport, leaseDuration);
+        var initial = ReadProject((await transport.GetAsync(path, cancellationToken)).Json, projectId);
+        var notes = (JsonObject)initial["Notes"]!;
+        var proposals = GetCollection(initial, "TaskProposals");
+        var tasks = GetCollection(initial, "Tasks");
+        var candidates = new List<(string Id, DateTimeOffset CreatedAt)>();
+        foreach (var entry in notes)
+        {
+            var note = (JsonObject)entry.Value!;
+            if (!Active(note) || !HasText(note, "OriginalPath") || !HasText(note, "CreatedAt") ||
+                !DateTimeOffset.TryParse((string)note["CreatedAt"]!, CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind, out var createdAt)) continue;
+            string remotePath;
+            try { remotePath = ProjectPathNormalizer.Normalize((string)note["OriginalPath"]!); }
+            catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException) { continue; }
+            if (!string.Equals(remotePath, localPath, pathComparison) ||
+                tasks.ContainsKey(TaskId(entry.Key)) || HasLinkedTask(tasks, entry.Key)) continue;
+            if (proposals.TryGetPropertyValue(entry.Key, out var proposalNode) &&
+                ReadProposal(proposalNode, entry.Key, projectId).State is not (TaskProposalStates.Queued or TaskProposalStates.Processing)) continue;
+            candidates.Add((entry.Key, createdAt));
+        }
+
+        foreach (var candidate in candidates.OrderBy(item => item.CreatedAt).ThenBy(item => item.Id, StringComparer.Ordinal))
+        {
+            var handle = await lease.AcquireAsync(candidate.Id, workerInstallationId, workerName, cancellationToken);
+            if (handle is null) continue;
+            var candidatePath = ProjectPath(projectId);
+            for (var attempt = 0; attempt < MaxAttempts; attempt++)
+            {
+                var snapshot = await transport.GetAsync(candidatePath, cancellationToken);
+                var root = ReadProject(snapshot.Json, projectId);
+                if (!FirebaseProjectLease.IsValid(root, handle, FirebaseProjectLease.ServerTime(snapshot))) break;
+                var notesNow = (JsonObject)root["Notes"]!;
+                if (!notesNow.TryGetPropertyValue(candidate.Id, out var noteValue) || noteValue is not JsonObject note ||
+                    !Active(note) || !HasText(note, "OriginalPath")) break;
+                string remotePath;
+                try { remotePath = ProjectPathNormalizer.Normalize((string)note["OriginalPath"]!); }
+                catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException) { break; }
+                if (!string.Equals(remotePath, localPath, pathComparison)) break;
+                var currentTasks = GetCollection(root, "Tasks");
+                if (currentTasks.ContainsKey(TaskId(candidate.Id)) || HasLinkedTask(currentTasks, candidate.Id)) break;
+                var currentProposals = GetCollection(root, "TaskProposals");
+                JsonObject claimed;
+                FirebaseTaskProposal proposal;
+                if (currentProposals.TryGetPropertyValue(candidate.Id, out var existing))
+                {
+                    proposal = ReadProposal(existing, candidate.Id, projectId);
+                    if (proposal.State is not (TaskProposalStates.Queued or TaskProposalStates.Processing)) break;
+                    claimed = ((JsonObject)existing!).DeepClone().AsObject();
+                    claimed["State"] = TaskProposalStates.Processing;
+                    claimed["UpdatedAt"] = Timestamp();
+                    claimed["Attempts"] = proposal.Attempts;
+                }
+                else
+                {
+                    var timestamp = Timestamp();
+                    proposal = new FirebaseTaskProposal(candidate.Id, projectId, TaskProposalStates.Processing,
+                        null, null, null, null, null, null, timestamp, timestamp, Attempts: 1);
+                    claimed = JsonSerializer.SerializeToNode(proposal)!.AsObject();
+                }
+                currentProposals[candidate.Id] = claimed;
+                root["TaskProposals"] = currentProposals;
+                if (await transport.PutIfMatchAsync(candidatePath, root.ToJsonString(), snapshot.ETag, cancellationToken))
+                    return new FirebaseTaskClaim((JsonObject)note.DeepClone(), ReadProposal(claimed, candidate.Id, projectId), handle);
+            }
+        }
+        return null;
+    }
 
     public async Task<FirebaseTaskProposal> SaveReadyProposalAsync(FirebaseProjectLeaseHandle handle, string reportId, string title,
         string description, string acceptanceCriteria, string? verificationSummary,
@@ -391,9 +476,14 @@ public sealed class FirebaseTaskRepository(FirebaseRealtimeDatabaseTransport tra
         var processing = proposal.State == TaskProposalStates.Processing &&
             proposal.Relevance is null && proposal.RecommendedAction is null && proposal.Title is null &&
             proposal.Description is null && proposal.AcceptanceCriteria is null &&
-            proposal.VerificationSummary is null && proposal.CurrentConsequences is null &&
+            proposal.VerificationSummary is null &&
             proposal.FinalRejectionReason is null && proposal.Error is null;
-        if (!(current || obsolete || unverified || failed || processing)) throw InvalidData();
+        var queued = proposal.State == TaskProposalStates.Queued &&
+            proposal.Relevance is null && proposal.RecommendedAction is null && proposal.Title is null &&
+            proposal.Description is null && proposal.AcceptanceCriteria is null &&
+            proposal.VerificationSummary is null &&
+            proposal.FinalRejectionReason is null && proposal.Error is null;
+        if (!(current || obsolete || unverified || failed || processing || queued)) throw InvalidData();
         return proposal;
     }
 

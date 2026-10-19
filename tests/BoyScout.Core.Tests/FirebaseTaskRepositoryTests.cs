@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json.Nodes;
+using BoyScout.Core.Storage.Config;
 using BoyScout.Core.Storage.Firebase;
 using Xunit;
 
@@ -316,6 +317,208 @@ public sealed class FirebaseTaskRepositoryTests
         Assert.Equal("note-extra", server.Root["Notes"]![Id]!["Extra"]!.GetValue<string>());
     }
 
+    [Fact]
+    public async Task Claim_requires_consent_existing_binding_path_matching_note_path_and_active_note()
+    {
+        using var server = new Server();
+        using var directory = BoundDirectory(server);
+        var repo = Repository(server);
+        var binding = Binding(directory.Path);
+
+        Assert.Null(await repo.ClaimNextEligibleNoteAsync(binding with { AiReadConsent = false }, "worker", "name",
+            TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken));
+        Assert.Null(await repo.ClaimNextEligibleNoteAsync(binding with { LocalPath = Path.Combine(directory.Path, "missing") },
+            "worker", "name", TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken));
+        var state = server.Root;
+        state["Notes"]![Id]!["OriginalPath"] = Path.Combine(directory.Path, "elsewhere");
+        server.Root = state;
+        Assert.Null(await repo.ClaimNextEligibleNoteAsync(binding, "worker", "name", TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken));
+        state = server.Root;
+        state["Notes"]![Id]!["OriginalPath"] = directory.Path;
+        state["Notes"]![Id]!["Status"] = "dismissed";
+        server.Root = state;
+        Assert.Null(await repo.ClaimNextEligibleNoteAsync(binding, "worker", "name", TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken));
+        Assert.Null(server.Root["TaskProposals"]);
+    }
+
+    [Fact]
+    public async Task Claim_excludes_notes_with_direct_or_linked_tasks_and_ready_proposals()
+    {
+        using var server = new Server();
+        using var directory = BoundDirectory(server);
+        var repo = Repository(server);
+        var binding = Binding(directory.Path);
+        var state = server.Root;
+        state["Tasks"]!["BST-" + Id] = new JsonObject { ["SourceReportIds"] = new JsonArray() };
+        server.Root = state;
+        Assert.Null(await repo.ClaimNextEligibleNoteAsync(binding, "worker", "name", TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken));
+        state = server.Root;
+        state["Tasks"]!.AsObject().Remove("BST-" + Id);
+        state["Tasks"]!["BST-other"]!["SourceReportIds"] = new JsonArray(Id);
+        server.Root = state;
+        Assert.Null(await repo.ClaimNextEligibleNoteAsync(binding, "worker", "name", TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken));
+        state = server.Root;
+        state["Tasks"]!["BST-other"]!["SourceReportIds"] = new JsonArray("other");
+        server.Root = state;
+        await repo.SaveReadyProposalAsync(await Acquire(server), Id, "ready", "description", "criteria", null,
+            TestContext.Current.CancellationToken);
+        Assert.Null(await repo.ClaimNextEligibleNoteAsync(binding, "worker", "name", TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken));
+        Assert.Equal("ready", server.Root["TaskProposals"]![Id]!["State"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Claim_creates_initial_processing_proposal_with_attempt_one()
+    {
+        using var server = new Server();
+        using var directory = BoundDirectory(server);
+        var claim = await Repository(server).ClaimNextEligibleNoteAsync(Binding(directory.Path), "worker", "name",
+            TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(claim);
+        Assert.Equal(Id, claim.Note["Id"]!.GetValue<string>());
+        Assert.Equal("processing", claim.Proposal.State);
+        Assert.Equal(1, claim.Proposal.Attempts);
+        Assert.Equal(Id, claim.Lease.ReportId);
+        Assert.Equal("processing", server.Root["TaskProposals"]![Id]!["State"]!.GetValue<string>());
+        Assert.Equal(claim.Proposal.CreatedAt, claim.Proposal.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task Claim_selects_oldest_note_before_id_order()
+    {
+        using var server = new Server();
+        using var directory = BoundDirectory(server);
+        const string olderId = "BSR-1-0000000000000000002";
+        var root = server.Root;
+        var olderNote = root["Notes"]![Id]!.DeepClone().AsObject();
+        olderNote["Id"] = olderId;
+        olderNote["CreatedAt"] = "2024-01-01T00:00:00.000Z";
+        root["Notes"]![olderId] = olderNote;
+        server.Root = root;
+
+        var claim = await Repository(server).ClaimNextEligibleNoteAsync(Binding(directory.Path), "worker", "name",
+            TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(claim);
+        Assert.Equal(olderId, claim.Note["Id"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Claim_queued_proposal_preserves_attempts_and_review_intent()
+    {
+        using var server = new Server();
+        using var directory = BoundDirectory(server);
+        var state = server.Root;
+        state["TaskProposals"] = new JsonObject
+        {
+            [Id] = JsonNode.Parse("""
+                {"ReportId":"BSR-1-0000000000000000001","ProjectId":1,"State":"queued",
+                 "CreatedAt":"2025-01-01T00:00:00.000Z","UpdatedAt":"2025-01-02T00:00:00.000Z",
+                 "Attempts":3,"ReviewIntent":"verify independently","RequestedClarification":"check impact",
+                 "RequestedRejectionReason":"not obsolete","CurrentConsequences":"preserve this context"}
+                """)
+        };
+        server.Root = state;
+
+        var claim = await Repository(server).ClaimNextEligibleNoteAsync(Binding(directory.Path), "worker", "name",
+            TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(claim);
+        Assert.Equal(3, claim.Proposal.Attempts);
+        Assert.Equal("verify independently", claim.Proposal.ReviewIntent);
+        Assert.Equal("check impact", claim.Proposal.RequestedClarification);
+        Assert.Equal("not obsolete", claim.Proposal.RequestedRejectionReason);
+        Assert.Equal("preserve this context", claim.Proposal.CurrentConsequences);
+        Assert.Equal("processing", claim.Proposal.State);
+    }
+
+    [Fact]
+    public async Task Claim_recovers_processing_proposal_only_after_old_lease_expires()
+    {
+        using var server = new Server();
+        using var directory = BoundDirectory(server);
+        SetProcessingProposal(server);
+        var state = server.Root;
+        state["TaskProposals"]![Id]!["Attempts"] = 4;
+        server.Root = state;
+        var oldLease = (await Lease(server).AcquireAsync(Id, "old-worker", "old", TestContext.Current.CancellationToken))!;
+        Assert.Null(await Repository(server).ClaimNextEligibleNoteAsync(Binding(directory.Path), "worker", "name",
+            TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken));
+        server.Now = oldLease.ExpiresAt;
+
+        var claim = await Repository(server).ClaimNextEligibleNoteAsync(Binding(directory.Path), "worker", "name",
+            TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(claim);
+        Assert.Equal(4, claim.Proposal.Attempts);
+        Assert.NotEqual(oldLease.Token, claim.Lease.Token);
+    }
+
+    [Fact]
+    public async Task Concurrent_claimers_create_only_one_processing_claim()
+    {
+        using var server = new Server();
+        using var directory = BoundDirectory(server);
+        var binding = Binding(directory.Path);
+        var results = await Task.WhenAll(Enumerable.Range(0, 2).Select(_ => Repository(server)
+            .ClaimNextEligibleNoteAsync(binding, "worker", "name", TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken)));
+
+        Assert.Single(results, result => result is not null);
+        Assert.Equal("processing", server.Root["TaskProposals"]![Id]!["State"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Claim_retries_cas_precondition_conflict_without_overwriting_new_proposal_state()
+    {
+        using var server = new Server();
+        using var directory = BoundDirectory(server);
+        server.ConflictWriteNumber = 2;
+        var claim = await Repository(server).ClaimNextEligibleNoteAsync(Binding(directory.Path), "worker", "name",
+            TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken);
+        Assert.NotNull(claim);
+        Assert.Equal(3, server.Writes);
+
+        using var other = new Server();
+        using var otherDirectory = BoundDirectory(other);
+        other.BeforeNextPut = () =>
+        {
+            var changed = other.Root;
+            changed["TaskProposals"] = new JsonObject
+            {
+                [Id] = JsonNode.Parse("""
+                    {"ReportId":"BSR-1-0000000000000000001","ProjectId":1,"State":"ready",
+                     "Relevance":"current","RecommendedAction":"create_task","Title":"Ready",
+                     "Description":"Description","AcceptanceCriteria":"Criteria",
+                     "CreatedAt":"2025-01-01T00:00:00.000Z","UpdatedAt":"2025-01-01T00:00:00.000Z"}
+                    """)
+            };
+            other.Root = changed;
+        };
+        var noClaim = await Repository(other).ClaimNextEligibleNoteAsync(Binding(otherDirectory.Path), "worker", "name",
+            TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken);
+        Assert.Null(noClaim);
+        Assert.Equal("ready", other.Root["TaskProposals"]![Id]!["State"]!.GetValue<string>());
+    }
+
+    private static ProjectBinding Binding(string path) => new(1, path, true);
+
+    private static TempDirectory BoundDirectory(Server server)
+    {
+        var directory = new TempDirectory();
+        var root = server.Root;
+        root["Notes"]![Id]!["OriginalPath"] = directory.Path;
+        root["Notes"]![Id]!["CreatedAt"] = "2025-01-01T00:00:00.000Z";
+        server.Root = root;
+        return directory;
+    }
+
+    private sealed class TempDirectory : IDisposable
+    {
+        public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "boy-scout-" + Guid.NewGuid().ToString("N"));
+        public TempDirectory() => Directory.CreateDirectory(Path);
+        public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
+
     private static FirebaseProjectLease Lease(Server server) => new(new FirebaseRealtimeDatabaseTransport(
         new FirebaseConnection("https://example.firebaseio.com/", "project", "service@example.com", "test-key"),
         server.Client, _ => Task.FromResult("token")), TimeSpan.FromMinutes(2));
@@ -351,6 +554,7 @@ public sealed class FirebaseTaskRepositoryTests
         public HttpClient Client { get; }
         public bool ConflictNext { get; set; }
         public bool ThrowNext { get; set; }
+        public int ConflictWriteNumber { get; set; }
         public int Writes { get; private set; }
         public DateTimeOffset Now { get; set; } = Start;
         public bool HasDate { get; set; } = true;
@@ -383,7 +587,12 @@ public sealed class FirebaseTaskRepositoryTests
                     finally { System.Threading.Monitor.Enter(gate); }
                 }
                 if (ThrowNext) { ThrowNext = false; throw new HttpRequestException("Ambiguous write"); }
-                if (ConflictNext) { ConflictNext = false; version++; return new HttpResponseMessage(HttpStatusCode.PreconditionFailed); }
+                if (ConflictNext || Writes == ConflictWriteNumber && ConflictWriteNumber != 0)
+                {
+                    ConflictNext = false;
+                    version++;
+                    return new HttpResponseMessage(HttpStatusCode.PreconditionFailed);
+                }
                 if (Assert.Single(request.Headers.GetValues("if-match")) != $"\"v{version}\"")
                     return new HttpResponseMessage(HttpStatusCode.PreconditionFailed);
                 root = JsonNode.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult())!.AsObject();
