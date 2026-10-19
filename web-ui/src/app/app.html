@@ -215,6 +215,38 @@
                       <button type="button" [disabled]="storagePending()" (click)="setRemoteAiConsent(remote.id, !binding.aiReadConsent)">
                         {{ binding.aiReadConsent ? 'Запретить AI чтение' : 'Разрешить AI чтение на этой машине' }}
                       </button>
+                      @if (binding.firebaseWriteEnabled) {
+                        <p class="storage-status">Новые MCP/API-заметки сохраняются в Firebase. Существующая история остаётся в SQLite.</p>
+                      } @else {
+                        <button type="button" [disabled]="storagePending()" (click)="previewFirebaseActivation(remote.id)">
+                          {{ firebaseActivationPending() === 'preview' ? 'Этап 1/2: проверяем Firebase и сверяем данные…' : 'Этап 1/2: проверить проект перед включением' }}
+                        </button>
+                      }
+                      @if (firebaseActivationPreview(); as activation) {
+                        @if (activation.projectId === remote.id) {
+                          <div class="setup-preview firebase-activation-preview">
+                            <h5>Этап 1/2 завершён: preflight проекта</h5>
+                            <p>Проверены доступность Firebase, условная запись без изменения данных и привязка локального пути. Сверены объёмы обеих баз; подтверждение повторит сверку. Существующие записи не копируются и не удаляются.</p>
+                            <ol>
+                              <li>Firebase: проект доступен, запись {{ activation.firebaseWriteAccess ? 'проверена' : 'не подтверждена' }}, заметок {{ activation.firebaseNotes }}, задач {{ activation.firebaseTasks }}.</li>
+                              <li>SQLite: заметок {{ activation.localNotes }}, задач {{ activation.localTasks }} останутся локально.</li>
+                              <li>Путь {{ activation.localPath }}; согласие AI {{ activation.aiReadConsent ? 'дано' : 'не дано' }}.</li>
+                              <li>Фоновая обработка OpenCode {{ activation.workerAvailable ? 'доступна' : 'недоступна' }}{{ activation.workerEnabled ? ' и включена' : ' и сейчас остановлена' }}.</li>
+                            </ol>
+                            <p>Проверка включает полный просмотр страниц Firebase и read-only снимок SQLite. Контрольная сумма локальных данных: <code>{{ activation.localSha256 }}</code></p>
+                            @if (activation.alreadyEnabled) {
+                              <p class="storage-status">Приём новых заметок в Firebase уже включён.</p>
+                            } @else if (activation.blockingReason) {
+                              <p class="setup-warning">{{ activation.blockingReason }}</p>
+                            } @else if (activation.readyToEnable) {
+                              <button type="button" [disabled]="storagePending()" (click)="confirmFirebaseActivation()">
+                                {{ firebaseActivationPending() === 'confirm' ? 'Этап 2/2: перепроверяем и включаем…' : 'Этап 2/2: подтвердить новые заметки в Firebase' }}
+                              </button>
+                              <p>Подтверждение действует только для этого локального проекта и этой установки.</p>
+                            }
+                          </div>
+                        }
+                      }
                       @if (firebaseBindingForSelectedProject()?.projectId === remote.id) {
                         <button type="button" [disabled]="firebaseNotesLoading()" (click)="loadFirebaseNotes(remote.id)">Открыть заметки Firebase</button>
                       }

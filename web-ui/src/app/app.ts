@@ -146,7 +146,7 @@ interface StorageStatus {
 }
 
 interface RemoteProject { id: number; name: string; }
-interface RemoteBinding { projectId: number; localPath: string; aiReadConsent: boolean; }
+interface RemoteBinding { projectId: number; localPath: string; aiReadConsent: boolean; firebaseWriteEnabled: boolean; }
 interface FirebaseNoteTransferResult { localNoteId: string; firebaseNoteId: string; alreadyImported: boolean; }
 interface FirebaseRemoteNote {
   id: string;
@@ -179,6 +179,24 @@ interface FirebaseRemoteTask {
   confirmerInstallationId: string | null;
 }
 interface FirebaseRemoteTaskPage { items: FirebaseRemoteTask[]; nextCursor: string | null; }
+interface FirebaseWriteActivationPreview {
+  projectId: number;
+  projectName: string;
+  localPath: string;
+  localNotes: number;
+  localTasks: number;
+  localSha256: string;
+  firebaseNotes: number;
+  firebaseTasks: number;
+  firebaseWriteAccess: boolean;
+  alreadyEnabled: boolean;
+  aiReadConsent: boolean;
+  workerAvailable: boolean;
+  workerEnabled: boolean;
+  readyToEnable: boolean;
+  blockingReason: string | null;
+  token: string;
+}
 interface FirebaseProposalView {
   reportId: string;
   projectId: number;
@@ -298,6 +316,8 @@ export class App {
   protected readonly selectedFirebaseProposal = signal<FirebaseProposalView | null>(null);
   protected readonly firebaseRejectionReason = signal('');
   protected readonly firebaseReviewComment = signal('');
+  protected readonly firebaseActivationPreview = signal<FirebaseWriteActivationPreview | null>(null);
+  protected readonly firebaseActivationPending = signal<'preview' | 'confirm' | null>(null);
   protected readonly transferredNoteIds = signal<Record<string, string>>({});
   protected readonly remoteProjectName = signal('');
   protected readonly remotePaths = signal<Record<number, string>>({});
@@ -468,6 +488,44 @@ export class App {
       },
       error: (error: HttpErrorResponse) => { this.storagePending.set(false); this.setError(error); },
     });
+  }
+
+  protected previewFirebaseActivation(projectId: number): void {
+    if (this.storagePending()) return;
+    this.storagePending.set(true);
+    this.firebaseActivationPending.set('preview');
+    this.firebaseActivationPreview.set(null);
+    this.http.post<FirebaseWriteActivationPreview>(`/api/remote-projects/${projectId}/firebase-write/preview`, {})
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (preview) => {
+          this.firebaseActivationPreview.set(preview);
+          this.firebaseActivationPending.set(null);
+          this.storagePending.set(false);
+        },
+        error: (error: HttpErrorResponse) => { this.firebaseActivationPending.set(null); this.storagePending.set(false); this.setError(error); },
+      });
+  }
+
+  protected confirmFirebaseActivation(): void {
+    const preview = this.firebaseActivationPreview();
+    if (!preview?.readyToEnable || this.storagePending()) return;
+    this.storagePending.set(true);
+    this.firebaseActivationPending.set('confirm');
+    this.http.post<RemoteBinding>(`/api/remote-projects/${preview.projectId}/firebase-write/confirm`, { token: preview.token })
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (binding) => {
+          this.remoteBindings.update((bindings) => [
+            ...bindings.filter((item) => item.projectId !== binding.projectId), binding,
+          ]);
+          this.firebaseActivationPreview.update((current) => current ? { ...current, alreadyEnabled: true } : current);
+          this.firebaseActivationPending.set(null);
+          this.storagePending.set(false);
+          this.notice.set(`Новые заметки проекта будут отправляться в Firebase. Локальная история не перемещалась.`);
+        },
+        error: (error: HttpErrorResponse) => { this.firebaseActivationPending.set(null); this.storagePending.set(false); this.setError(error); },
+      });
   }
 
   protected firebaseBindingForSelectedProject(): RemoteBinding | null {
@@ -662,6 +720,7 @@ export class App {
       .pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
         next: (binding) => {
           this.remoteBindings.update((bindings) => [...bindings.filter((item) => item.projectId !== projectId), binding]);
+          this.firebaseActivationPreview.set(null);
           this.storagePending.set(false);
           this.notice.set('Локальный путь привязан. Доступ AI по умолчанию выключен.');
         },
@@ -676,6 +735,7 @@ export class App {
       .pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
         next: (binding) => {
           this.remoteBindings.update((bindings) => bindings.map((item) => item.projectId === projectId ? binding : item));
+          this.firebaseActivationPreview.set(null);
           this.storagePending.set(false);
         },
         error: (error: HttpErrorResponse) => { this.storagePending.set(false); this.setError(error); },
