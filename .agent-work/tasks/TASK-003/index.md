@@ -83,3 +83,5 @@ operations and merged pagination are implemented together.
 - ITR-032: show remote tasks and status controls in the bound project's Firebase review panel.
 - ITR-033: persist a per-binding Firebase-new-notes selection flag with fail-closed consent and credential checks.
 - ITR-034: route IReportStore add/get/status/list through Firebase for enabled bindings while retaining SQLite history.
+- ITR-035: preflight a bound Firebase project and enable only new-note writes after an explicit confirmation token.
+- next: present the preflight as a staged project-settings wizard; leave activation disabled until the user confirms its refreshed token.

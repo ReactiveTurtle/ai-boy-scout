@@ -7,6 +7,8 @@ using BoyScout.Core.Storage.Config;
 using BoyScout.Core.Storage.Firebase;
 using BoyScout.Core.Storage.Migration;
 using BoyScout.Core.Tasks;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -175,6 +177,47 @@ app.MapPatch("/api/remote-projects/{id:long}/ai-consent", IResult (
     catch (KeyNotFoundException) { return Results.NotFound(); }
     catch (DirectoryNotFoundException exception) { return Results.Conflict(new { error = exception.Message }); }
     catch (ArgumentOutOfRangeException exception) { return Results.BadRequest(new { error = exception.Message }); }
+});
+app.MapPost("/api/remote-projects/{projectId:long}/firebase-write/preview", async Task<IResult> (
+    BoyScoutConfigService service, BoyScoutDatabase database, IReportStore reports, ITaskStore tasks, AiProcessingControl control,
+    long projectId, CancellationToken token) =>
+{
+    if (projectId <= 0) return Results.BadRequest(new { error = "Project ID must be positive." });
+    if (service.ResolveByProjectId(projectId) is null)
+        return Results.Conflict(new { error = "Bind the Firebase project to a local path before activation." });
+    try
+    {
+        return Results.Ok(await BuildFirebaseWriteActivationPreviewAsync(service, database, reports, tasks, control, projectId, token));
+    }
+    catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (InvalidOperationException exception) when (exception.Message == "Configure Firebase credentials first.")
+    { return Results.Conflict(new { error = exception.Message }); }
+    catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException)
+    { return Results.Problem("Could not complete Firebase activation checks.", statusCode: StatusCodes.Status502BadGateway); }
+});
+app.MapPost("/api/remote-projects/{projectId:long}/firebase-write/confirm", async Task<IResult> (
+    BoyScoutConfigService service, BoyScoutDatabase database, IReportStore reports, ITaskStore tasks, AiProcessingControl control,
+    long projectId, FirebaseWriteConfirmationRequest request, CancellationToken token) =>
+{
+    if (projectId <= 0) return Results.BadRequest(new { error = "Project ID must be positive." });
+    if (service.ResolveByProjectId(projectId) is null)
+        return Results.Conflict(new { error = "Bind the Firebase project to a local path before activation." });
+    try
+    {
+        var preview = await BuildFirebaseWriteActivationPreviewAsync(service, database, reports, tasks, control, projectId, token);
+        if (!preview.ReadyToEnable)
+            return Results.Conflict(new { error = preview.BlockingReason ?? "Firebase project is not ready to activate." });
+        if (string.IsNullOrWhiteSpace(request.Token) || request.Token != preview.Token)
+            return Results.Conflict(new { error = "Activation preview changed. Review a fresh preview before confirming." });
+        return Results.Ok(service.SetFirebaseWriteEnabled(projectId, true));
+    }
+    catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (InvalidOperationException exception) when (exception.Message == "Configure Firebase credentials first.")
+    { return Results.Conflict(new { error = exception.Message }); }
+    catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException)
+    { return Results.Problem("Could not confirm Firebase activation.", statusCode: StatusCodes.Status502BadGateway); }
 });
 app.MapGet("/api/remote-projects/{projectId:long}/notes", async Task<IResult> (
     BoyScoutConfigService service, long projectId, string? before, int limit = 40, CancellationToken token = default) =>
@@ -900,6 +943,59 @@ static IResult? ValidateFirebaseProjectBinding(BoyScoutConfigService service, lo
         : null;
 }
 
+static async Task<FirebaseWriteActivationPreview> BuildFirebaseWriteActivationPreviewAsync(
+    BoyScoutConfigService service, BoyScoutDatabase database, IReportStore reports, ITaskStore tasks,
+    AiProcessingControl control, long remoteProjectId, CancellationToken cancellationToken)
+{
+    var binding = service.ResolveByProjectId(remoteProjectId)
+        ?? throw new KeyNotFoundException("Firebase project is not bound on this installation.");
+    var project = reports.ListProjects().FirstOrDefault(local =>
+        string.Equals(ProjectPathNormalizer.Normalize(local.PrimaryPath), binding.LocalPath,
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+        ?? throw new InvalidOperationException("Add the bound directory as a local project before activation.");
+    var localSnapshot = new LocalProjectSnapshotReader(database.DatabasePath).Read(project.Id);
+    var worker = control.Status;
+    using var transport = new FirebaseRealtimeDatabaseTransport(service.LoadConfiguredFirebaseConnection());
+    var remoteReports = new FirebaseReportRepository(transport, new FirebaseSequenceAllocator(transport));
+    var firebaseProject = await remoteReports.GetProjectAsync(remoteProjectId, cancellationToken)
+        ?? throw new KeyNotFoundException("The bound Firebase project no longer exists.");
+
+    long firebaseNotes = 0;
+    string? noteCursor = null;
+    do
+    {
+        var page = await remoteReports.BrowseNotesAsync(remoteProjectId, noteCursor, 100, cancellationToken);
+        firebaseNotes += page.Items.Count;
+        noteCursor = page.NextCursor;
+    } while (noteCursor is not null);
+
+    long firebaseTasks = 0;
+    string? taskCursor = null;
+    var remoteTasks = new FirebaseTaskRepository(transport);
+    do
+    {
+        var page = await remoteTasks.BrowseTasksAsync(remoteProjectId, taskCursor, 100, cancellationToken);
+        firebaseTasks += page.Items.Count;
+        taskCursor = page.NextCursor;
+    } while (taskCursor is not null);
+
+    var ready = binding.AiReadConsent && Directory.Exists(binding.LocalPath) && worker.Available;
+    var reason = !Directory.Exists(binding.LocalPath) ? "The bound local directory is unavailable."
+        : !binding.AiReadConsent ? "Grant AI read consent for the bound project before activation."
+        : !worker.Available ? "OpenCode background processing is disabled by environment configuration."
+        : null;
+    var installation = service.LoadStatus();
+    var fingerprint = string.Join("\0", installation.InstallationId.ToString("D"), remoteProjectId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        firebaseProject.Name, binding.LocalPath, binding.AiReadConsent.ToString(), worker.Available.ToString(),
+        worker.Enabled.ToString(), localSnapshot.Sha256, firebaseNotes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        firebaseTasks.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    var token = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprint)));
+    return new FirebaseWriteActivationPreview(remoteProjectId, firebaseProject.Name, binding.LocalPath,
+        localSnapshot.Counts.Reports, localSnapshot.Counts.Tasks, localSnapshot.Sha256,
+        firebaseNotes, firebaseTasks, binding.FirebaseWriteEnabled, binding.AiReadConsent,
+        worker.Available, worker.Enabled, ready, reason, token);
+}
+
 internal sealed record TaskStatusUpdate(string? Status);
 
 internal sealed record AutomationUpdate(bool Enabled);
@@ -911,6 +1007,13 @@ internal sealed record CreateRemoteProjectRequest(string? Name);
 internal sealed record RemoteProjectBindingRequest(string? Path);
 
 internal sealed record RemoteProjectAiConsentRequest(bool Granted);
+
+internal sealed record FirebaseWriteConfirmationRequest(string? Token);
+
+internal sealed record FirebaseWriteActivationPreview(long ProjectId, string ProjectName, string LocalPath,
+    int LocalNotes, int LocalTasks, string LocalSha256, long FirebaseNotes, long FirebaseTasks,
+    bool AiReadConsent, bool WorkerAvailable, bool WorkerEnabled, bool AlreadyEnabled,
+    bool ReadyToEnable, string? BlockingReason, string Token);
 
 internal sealed record ProjectAiAccessUpdate(bool Granted);
 
