@@ -272,6 +272,120 @@ app.MapPost("/api/remote-projects/{projectId:long}/notes/{noteId}/confirm-reject
     catch (Exception exception) when (exception is HttpRequestException)
     { return Results.Problem("Could not confirm the Firebase rejection.", statusCode: StatusCodes.Status502BadGateway); }
 });
+app.MapPost("/api/remote-projects/{projectId:long}/notes/{noteId}/rejection-review", async Task<IResult> (
+    BoyScoutConfigService service, long projectId, string noteId, RejectionReviewRequest request, CancellationToken token) =>
+{
+    if (ValidateFirebaseReviewScope(service, projectId, noteId, requireAiConsent: true) is { } scopeError) return scopeError;
+    try
+    {
+        using var transport = new FirebaseRealtimeDatabaseTransport(service.LoadConfiguredFirebaseConnection());
+        var note = await new FirebaseReportRepository(transport, new FirebaseSequenceAllocator(transport)).GetNoteAsync(noteId, token);
+        if (note is null || note.ProjectId != projectId) return Results.NotFound();
+        return Results.Ok(await new FirebaseTaskRepository(transport).RequestRejectionReviewAsync(noteId,
+            request.Reason ?? string.Empty, token));
+    }
+    catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (InvalidOperationException exception) when (exception.Message == "Configure Firebase credentials first.")
+    { return Results.Conflict(new { error = exception.Message }); }
+    catch (InvalidOperationException exception) { return Results.Conflict(new { error = exception.Message }); }
+    catch (HttpRequestException) { return Results.Problem("Could not queue Firebase rejection review.", statusCode: StatusCodes.Status502BadGateway); }
+});
+app.MapPost("/api/remote-projects/{projectId:long}/notes/{noteId}/clarification", async Task<IResult> (
+    BoyScoutConfigService service, long projectId, string noteId, ClarificationRequest request, CancellationToken token) =>
+{
+    if (ValidateFirebaseReviewScope(service, projectId, noteId, requireAiConsent: true) is { } scopeError) return scopeError;
+    try
+    {
+        using var transport = new FirebaseRealtimeDatabaseTransport(service.LoadConfiguredFirebaseConnection());
+        var note = await new FirebaseReportRepository(transport, new FirebaseSequenceAllocator(transport)).GetNoteAsync(noteId, token);
+        if (note is null || note.ProjectId != projectId) return Results.NotFound();
+        return Results.Ok(await new FirebaseTaskRepository(transport).RequestClarificationAsync(noteId,
+            request.Instruction ?? string.Empty, token));
+    }
+    catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (InvalidOperationException exception) when (exception.Message == "Configure Firebase credentials first.")
+    { return Results.Conflict(new { error = exception.Message }); }
+    catch (InvalidOperationException exception) { return Results.Conflict(new { error = exception.Message }); }
+    catch (HttpRequestException) { return Results.Problem("Could not queue Firebase clarification.", statusCode: StatusCodes.Status502BadGateway); }
+});
+app.MapPost("/api/remote-projects/{projectId:long}/notes/{noteId}/retry", async Task<IResult> (
+    BoyScoutConfigService service, long projectId, string noteId, CommentRequest request, CancellationToken token) =>
+{
+    if (ValidateFirebaseReviewScope(service, projectId, noteId, requireAiConsent: true) is { } scopeError) return scopeError;
+    try
+    {
+        using var transport = new FirebaseRealtimeDatabaseTransport(service.LoadConfiguredFirebaseConnection());
+        var note = await new FirebaseReportRepository(transport, new FirebaseSequenceAllocator(transport)).GetNoteAsync(noteId, token);
+        if (note is null || note.ProjectId != projectId) return Results.NotFound();
+        return Results.Ok(await new FirebaseTaskRepository(transport).RetryProposalAsync(noteId,
+            request.Comment ?? string.Empty, token));
+    }
+    catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (InvalidOperationException exception) when (exception.Message == "Configure Firebase credentials first.")
+    { return Results.Conflict(new { error = exception.Message }); }
+    catch (InvalidOperationException exception) { return Results.Conflict(new { error = exception.Message }); }
+    catch (HttpRequestException) { return Results.Problem("Could not retry the Firebase proposal.", statusCode: StatusCodes.Status502BadGateway); }
+});
+app.MapPost("/api/remote-projects/{projectId:long}/notes/{noteId}/requeue", async Task<IResult> (
+    BoyScoutConfigService service, long projectId, string noteId, CommentRequest request, CancellationToken token) =>
+{
+    if (ValidateFirebaseReviewScope(service, projectId, noteId, requireAiConsent: true) is { } scopeError) return scopeError;
+    try
+    {
+        using var transport = new FirebaseRealtimeDatabaseTransport(service.LoadConfiguredFirebaseConnection());
+        var note = await new FirebaseReportRepository(transport, new FirebaseSequenceAllocator(transport)).GetNoteAsync(noteId, token);
+        if (note is null || note.ProjectId != projectId) return Results.NotFound();
+        return Results.Ok(await new FirebaseTaskRepository(transport).RequeueProcessingProposalAsync(noteId,
+            request.Comment ?? string.Empty, token));
+    }
+    catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (InvalidOperationException exception) when (exception.Message == "Configure Firebase credentials first.")
+    { return Results.Conflict(new { error = exception.Message }); }
+    catch (InvalidOperationException exception) { return Results.Conflict(new { error = exception.Message }); }
+    catch (HttpRequestException) { return Results.Problem("Could not requeue the Firebase proposal.", statusCode: StatusCodes.Status502BadGateway); }
+});
+app.MapPost("/api/remote-projects/{projectId:long}/notes/{noteId}/restore", async Task<IResult> (
+    BoyScoutConfigService service, long projectId, string noteId, CommentRequest request, CancellationToken token) =>
+{
+    if (ValidateFirebaseReviewScope(service, projectId, noteId, requireAiConsent: true) is { } scopeError) return scopeError;
+    try
+    {
+        using var transport = new FirebaseRealtimeDatabaseTransport(service.LoadConfiguredFirebaseConnection());
+        var note = await new FirebaseReportRepository(transport, new FirebaseSequenceAllocator(transport)).GetNoteAsync(noteId, token);
+        if (note is null || note.ProjectId != projectId) return Results.NotFound();
+        return Results.Ok(await new FirebaseTaskRepository(transport).RestoreRejectedNoteAsync(noteId,
+            request.Comment ?? string.Empty, token));
+    }
+    catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (InvalidOperationException exception) when (exception.Message == "Configure Firebase credentials first.")
+    { return Results.Conflict(new { error = exception.Message }); }
+    catch (InvalidOperationException exception) { return Results.Conflict(new { error = exception.Message }); }
+    catch (HttpRequestException) { return Results.Problem("Could not restore the Firebase note.", statusCode: StatusCodes.Status502BadGateway); }
+});
+app.MapPost("/api/remote-projects/{projectId:long}/notes/{noteId}/reprocess", async Task<IResult> (
+    BoyScoutConfigService service, long projectId, string noteId, CommentRequest request, CancellationToken token) =>
+{
+    if (ValidateFirebaseReviewScope(service, projectId, noteId, requireAiConsent: true) is { } scopeError) return scopeError;
+    try
+    {
+        using var transport = new FirebaseRealtimeDatabaseTransport(service.LoadConfiguredFirebaseConnection());
+        var note = await new FirebaseReportRepository(transport, new FirebaseSequenceAllocator(transport)).GetNoteAsync(noteId, token);
+        if (note is null || note.ProjectId != projectId) return Results.NotFound();
+        return Results.Ok(await new FirebaseTaskRepository(transport).ReprocessCompletedNoteAsync(noteId,
+            request.Comment ?? string.Empty, token));
+    }
+    catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (InvalidOperationException exception) when (exception.Message == "Configure Firebase credentials first.")
+    { return Results.Conflict(new { error = exception.Message }); }
+    catch (InvalidOperationException exception) { return Results.Conflict(new { error = exception.Message }); }
+    catch (HttpRequestException) { return Results.Problem("Could not reprocess the Firebase note.", statusCode: StatusCodes.Status502BadGateway); }
+});
 app.MapGet("/api/automation", (AiProcessingControl control) => Results.Ok(control.Status));
 app.MapPatch(
     "/api/automation",
@@ -726,6 +840,20 @@ static async Task<string?> ReadOptionalCommentAsync(HttpRequest request, Cancell
     if (!request.HasJsonContentType())
         throw new BadHttpRequestException("Expected a JSON comment body.", StatusCodes.Status415UnsupportedMediaType);
     return (await request.ReadFromJsonAsync<CommentRequest>(cancellationToken: token))?.Comment;
+}
+
+static IResult? ValidateFirebaseReviewScope(BoyScoutConfigService service, long projectId, string noteId,
+    bool requireAiConsent)
+{
+    if (projectId <= 0) return Results.BadRequest(new { error = "Project ID must be positive." });
+    if (string.IsNullOrWhiteSpace(noteId) || !noteId.StartsWith($"BSR-{projectId}-", StringComparison.Ordinal))
+        return Results.BadRequest(new { error = "Note ID does not belong to the selected Firebase project." });
+    var binding = service.ResolveByProjectId(projectId);
+    if (binding is null)
+        return Results.Conflict(new { error = "Bind the Firebase project to a local path before reviewing its notes." });
+    if (requireAiConsent && !binding.AiReadConsent)
+        return Results.Conflict(new { error = "Grant AI read consent for the bound project before queueing work." });
+    return null;
 }
 
 internal sealed record TaskStatusUpdate(string? Status);
