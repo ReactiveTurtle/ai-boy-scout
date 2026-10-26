@@ -1,0 +1,33 @@
+.project-page{max-width:1500px;margin:32px auto;padding:0 28px}.project-page>a{color:#537466}.project-heading{display:flex;justify-content:space-between;align-items:center;margin:24px 0}.project-heading h1{margin:6px 0;font-size:32px}.project-heading p{color:#71837b}.project-columns{display:grid;grid-template-columns:1fr 1fr;gap:20px}.project-panel{background:#fff;border:1px solid #e1e9e4;border-radius:16px;padding:22px;min-width:0}.project-section-heading{display:flex;justify-content:space-between;align-items:center}.project-section-heading h2{margin:0 0 16px}.project-panel button,.project-link-form button,#raw-form button{cursor:pointer;border:0;border-radius:8px;background:#174d40;color:white;padding:10px 14px}.project-panel button:disabled{opacity:.6}.project-task,.project-candidate{border-top:1px solid #e7eeea;padding:16px 0}.project-task h3,.project-candidate h3{margin:0 0 8px}.project-task p,.project-candidate p{white-space:pre-wrap}.project-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;color:#65766d;font-size:13px}.source-chip,.status-chip{display:inline-block;border-radius:99px;background:#e9f2ed;padding:4px 9px}.source-chip.boyscout{background:#f3eee2}.project-task a{color:#27624f}.project-task-links{margin-top:10px;color:#5d7067}.project-link-form,#raw-form{display:grid;gap:10px;padding-top:18px}.project-link-form label,#raw-form label{display:grid;gap:6px}.project-link-form select,.project-link-form input,#raw-form textarea{border:1px solid #cad8d0;border-radius:8px;padding:10px;font:inherit}.project-link-form span,[role=status]{color:#61796c}.project-link-form span.error,[role=status].error{color:#ae3f35}.project-candidate details{margin-top:12px}.project-candidate summary{cursor:pointer;color:#315f4f}.project-candidate form{display:grid;gap:9px;margin-top:10px}.project-candidate textarea{min-height:90px;padding:10px;border:1px solid #cad8d0;border-radius:8px;font:inherit}.project-error{color:#a43c34}@media(max-width:850px){.project-columns{grid-template-columns:1fr}.project-heading{align-items:flex-start;gap:16px;flex-direction:column}}
+.project-columns { grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; }
+.project-panel { min-width:0; overflow:hidden; padding:18px; border-radius:12px; }
+.project-section-heading { margin-bottom:8px; }
+.project-section-heading h2 { margin:0; font-size:20px; }
+.project-task { min-width:0; padding:12px 0; }
+.project-task h3 { font-size:16px; }
+.project-task p { margin:5px 0 8px; font-size:13px; line-height:1.45; }
+.project-meta { font-size:12px; }
+.project-task-links { display:flex; flex-wrap:wrap; gap:7px; margin:8px 0; font-size:12px; overflow-wrap:anywhere; }
+.project-task-links a { max-width:100%; overflow-wrap:anywhere; }
+.show-graph-button { min-height:34px; width:max-content; max-width:100%; margin-top:4px; padding:8px 11px; display:inline-flex; align-items:center; justify-content:center; border:1px solid #cbded0; border-radius:7px; color:#17644f!important; background:#f0f6f0; font-size:13px; font-weight:650; }
+.show-graph-button:hover { background:#e3f0e5; }
+.project-link-details { margin-top:10px; border-top:1px solid #e7eeea; padding-top:11px; }
+.project-link-details summary { color:#476157; font-size:13px; font-weight:650; cursor:pointer; }
+.project-link-form { width:100%; min-width:0; grid-template-columns:minmax(0,1fr); gap:8px; padding:12px 0 0; }
+.project-link-form h3 { margin:0; font-size:14px; }
+.project-link-form label { min-width:0; width:100%; font-size:12px; }
+.project-link-form select,.project-link-form input { width:100%; min-width:0; max-width:100%; height:40px; font-size:13px; }
+.project-link-form button { width:100%; min-width:0; }
+.project-link-form .show-graph-button { width:max-content; }
+.project-link-form [role="status"] { min-height:16px; overflow-wrap:anywhere; font-size:12px; }
+#raw-form { gap:8px; padding-top:10px; }
+#raw-form label { font-size:13px; }
+#raw-form textarea { min-height:92px; max-height:200px; width:100%; min-width:0; resize:vertical; font-size:14px; }
+#raw-form button { min-height:38px; }
+.project-candidate { min-width:0; padding:12px 0; }
+.project-candidate h3 { font-size:15px; }
+.project-candidate > p { margin:5px 0 8px; font-size:13px; line-height:1.45; overflow-wrap:anywhere; }
+.project-candidate details { font-size:13px; }
+.project-candidate form { min-width:0; }
+.project-candidate form textarea { width:100%; min-width:0; box-sizing:border-box; font-size:13px; }
+@media(max-width:850px) { .project-columns { grid-template-columns:minmax(0,1fr); } .project-panel { overflow:visible; } }

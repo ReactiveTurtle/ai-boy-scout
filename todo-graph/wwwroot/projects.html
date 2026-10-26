@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#173c36">
+  <title>Todo Graph · Проекты</title>
+  <link rel="stylesheet" href="/agent.css">
+  <link rel="stylesheet" href="/projects.css">
+  <link rel="stylesheet" href="/folder-picker.css">
+</head>
+<body>
+  <header class="graph-topbar">
+    <a class="graph-brand" href="/" aria-label="Todograph"><span class="graph-brand-mark">t</span><span>todo<span>graph</span></span></a>
+    <nav class="graph-nav" aria-label="Основная навигация"><a href="/graph.html">Граф задач</a><a class="active" href="/projects.html" aria-current="page">Проекты</a><a href="/index.html">Кандидаты</a><a href="/settings.html">Настройки</a></nav>
+    <label class="global-search"><span aria-hidden="true">⌕</span><input type="search" placeholder="Поиск проектов…"><kbd>Ctrl K</kbd></label>
+    <span class="graph-avatar" aria-label="Пользователь">А</span>
+  </header>
+  <main class="projects-workspace">
+    <aside class="projects-sidebar">
+      <div class="pane-heading"><div><span class="overline">Рабочее пространство</span><h1>Проекты</h1></div><span class="count-pill" id="project-count">—</span></div>
+      <label class="project-search"><span aria-hidden="true">⌕</span><input id="project-search" type="search" placeholder="Найти проект…"></label>
+      <div class="project-sidebar-list" id="project-sidebar-list"><p class="state-message">Загружаю проекты…</p></div>
+      <a class="sidebar-link" href="/graph.html">← Вернуться к графу задач</a>
+    </aside>
+    <section class="projects-main" aria-labelledby="projects-title">
+      <div class="main-heading"><div><span class="overline">Локальные репозитории</span><h2 id="projects-title">Все проекты</h2><p>Проекты Todo Graph привязаны к папкам Git-репозиториев на этом компьютере.</p></div><button class="refresh-button" id="refresh-projects" type="button">Обновить</button></div>
+      <div id="project-list" class="project-list" aria-live="polite"><p class="state-message">Загружаю проекты…</p></div>
+    </section>
+    <aside class="project-inspector" aria-label="Управление проектами">
+      <section class="inspector-section">
+        <span class="overline">Новый локальный проект</span><h2>Добавить проект</h2>
+        <p>Выберите папку существующего Git-репозитория на этом компьютере.</p>
+        <form id="create-project-form" novalidate>
+          <label>Локальная папка Git-репозитория<input id="create-repository-path" name="repositoryPath" required maxlength="2048" placeholder="Выберите папку на этом компьютере" autocomplete="off" readonly></label><button class="folder-picker-target" type="button" data-folder-picker-target="#create-repository-path">Обзор папок…</button>
+          <label>Хостинг<select name="codeHost"><option value="gitlab">GitLab</option><option value="github">GitHub</option></select></label>
+          <button type="submit">Добавить проект</button>
+          <p class="form-status" id="create-status" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+      <section class="inspector-section selected-project" id="selected-project" hidden>
+        <span class="overline">Локальная привязка</span><h2 id="selected-project-name">Проект</h2>
+        <p>У этого импортированного проекта пока нет локального пути. Укажите путь, чтобы связать его с репозиторием на этом компьютере.</p>
+        <form id="repository-form" novalidate>
+          <label>Локальная папка Git-репозитория<input id="bind-repository-path" name="repositoryPath" required maxlength="2048" placeholder="Выберите папку на этом компьютере" autocomplete="off" readonly></label><button class="folder-picker-target" type="button" data-folder-picker-target="#bind-repository-path">Обзор папок…</button>
+          <label>Хостинг<select name="codeHost"><option value="gitlab">GitLab</option><option value="github">GitHub</option></select></label>
+          <button type="submit">Сохранить путь</button>
+          <button class="text-button" type="button" id="cancel-selection">Отмена</button>
+          <p class="form-status" id="repository-status" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+      <p class="inspector-hint" id="inspector-hint">Выберите проект без локального пути, чтобы привязать его к папке на этом компьютере.</p>
+    </aside>
+  </main>
+  <script src="/folder-picker.js" defer></script><script src="/projects.js" defer></script>
+</body>
+</html>

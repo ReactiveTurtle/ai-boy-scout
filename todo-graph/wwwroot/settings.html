@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#173c36">
+  <title>Todo Graph · Настройки</title>
+  <link rel="stylesheet" href="/agent.css">
+  <link rel="stylesheet" href="/settings.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="wordmark" href="/" aria-label="Todo Graph"><span class="mark">t<span>·</span>g</span><span>todo<span class="wordmark-light">graph</span></span></a>
+    <div class="topbar-right"><span class="connection"><i></i> Локальные настройки</span><span class="topbar-divider"></span><a class="back-link" href="/graph.html">Полный граф</a><a class="back-link" href="/projects.html">Проекты</a><a class="back-link" href="/index.html">Кандидаты</a></div>
+  </header>
+  <main class="settings-page">
+    <section class="settings-heading"><span class="overline">Todo Graph</span><h1>Настройки проекта</h1><p>Здесь настраиваются имя пользователя и локальные GitLab MCP-процессы для фонового чтения MR и подтверждённых действий.</p></section>
+    <form id="settings-form">
+      <section class="settings-card">
+        <h2>Пользователь</h2>
+        <label class="settings-field"><span>Имя для ручных задач</span><input name="displayName" maxlength="100" placeholder="Например, Анна"></label>
+      </section>
+      <div class="settings-mcp-grid">
+        <section class="settings-card" data-server="read">
+          <div class="settings-card-heading"><div><span class="overline">Только чтение</span><h2>GitLab MCP</h2></div><label class="settings-toggle"><input name="readEnabled" type="checkbox"><span>Включён</span></label></div>
+          <p>Нужен для получения состояния, source branch и новых комментариев MR.</p>
+          <label class="settings-field"><span>Исполняемый файл</span><input name="readExecutable" maxlength="500" placeholder="npx"></label>
+          <label class="settings-field"><span>Аргументы как JSON-массив</span><textarea name="readArguments" rows="3" placeholder='["-y", "название-gitlab-mcp-пакета"]'></textarea></label>
+          <label class="settings-field"><span>Переменная окружения для токена</span><input name="readTokenEnvironment" maxlength="64" placeholder="GITLAB_TOKEN"></label>
+          <label class="settings-field"><span>Токен (оставьте пустым, чтобы не менять)</span><input name="readToken" type="password" autocomplete="new-password"></label>
+          <label class="settings-field"><span>Точные имена read-only tools через запятую</span><textarea name="readTools" rows="3" placeholder="list_merge_requests, get_merge_request, list_merge_request_discussions"></textarea></label>
+          <label class="settings-clear"><input name="readClearToken" type="checkbox"><span>Удалить сохранённый read-only токен</span></label>
+          <p class="settings-secret-state" id="read-secret-state"></p>
+        </section>
+        <section class="settings-card" data-server="write">
+          <div class="settings-card-heading"><div><span class="overline">Только подтверждённые действия</span><h2>GitLab MCP Write</h2></div><label class="settings-toggle"><input name="writeEnabled" type="checkbox"><span>Включён</span></label></div>
+          <p>Используется только после подтверждения ответа человеком и для создания MR после ручного push.</p>
+          <label class="settings-field"><span>Исполняемый файл</span><input name="writeExecutable" maxlength="500" placeholder="npx"></label>
+          <label class="settings-field"><span>Аргументы как JSON-массив</span><textarea name="writeArguments" rows="3" placeholder='["-y", "название-gitlab-mcp-пакета"]'></textarea></label>
+          <label class="settings-field"><span>Переменная окружения для токена</span><input name="writeTokenEnvironment" maxlength="64" placeholder="GITLAB_TOKEN"></label>
+          <label class="settings-field"><span>Токен с правами только для MR и discussion notes</span><input name="writeToken" type="password" autocomplete="new-password"></label>
+          <label class="settings-field"><span>Точные имена tools для ответа/создания MR</span><textarea name="writeTools" rows="3" placeholder="create_merge_request, create_discussion_note"></textarea></label>
+          <label class="settings-clear"><input name="writeClearToken" type="checkbox"><span>Удалить сохранённый write-токен</span></label>
+          <p class="settings-secret-state" id="write-secret-state"></p>
+        </section>
+        <section class="settings-card" data-server="github">
+          <div class="settings-card-heading"><div><span class="overline">Только чтение</span><h2>GitHub MCP</h2></div><label class="settings-toggle"><input name="githubEnabled" type="checkbox"><span>Включён</span></label></div>
+          <p>Нужен для чтения состояния, исходной ветки и новых комментариев GitHub PR. Push и создание PR остаются за пользователем.</p>
+          <label class="settings-field"><span>Исполняемый файл</span><input name="githubExecutable" maxlength="500" placeholder="npx"></label>
+          <label class="settings-field"><span>Аргументы как JSON-массив</span><textarea name="githubArguments" rows="3" placeholder='["-y", "название-github-mcp-пакета"]'></textarea></label>
+          <label class="settings-field"><span>Переменная окружения для токена</span><input name="githubTokenEnvironment" maxlength="64" placeholder="GITHUB_TOKEN"></label>
+          <label class="settings-field"><span>Токен чтения PR</span><input name="githubToken" type="password" autocomplete="new-password"></label>
+          <label class="settings-field"><span>Точные имена read-only tools через запятую</span><textarea name="githubTools" rows="3" placeholder="get_pull_request, list_pull_request_comments"></textarea></label>
+          <label class="settings-clear"><input name="githubClearToken" type="checkbox"><span>Удалить сохранённый GitHub токен</span></label>
+          <p class="settings-secret-state" id="github-secret-state"></p>
+        </section>
+      </div>
+      <div class="settings-save-row"><button type="submit" id="save-settings">Сохранить настройки</button><span id="settings-status" role="status"></span></div>
+    </form>
+    <section class="settings-note"><strong>Безопасность и push</strong><p>Токены шифруются на этом компьютере и не возвращаются в браузер. На write MCP разрешаются только перечисленные точные tools; инструменты push, commit и работы с ветками запрещены. Push ветки выполняет только человек.</p></section>
+  </main>
+  <script src="/settings.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+.folder-picker-dialog { width:min(620px,calc(100vw - 32px)); max-height:min(720px,calc(100vh - 32px)); padding:22px; border:1px solid #dce4dd; border-radius:14px; color:#19332f; background:#fff; box-shadow:0 24px 80px #10231f40; }
+.folder-picker-dialog::backdrop { background:#142b26a8; }
+.folder-picker-heading,.folder-picker-actions { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.folder-picker-heading h2 { margin:4px 0 0; font-size:20px; }
+.folder-picker-heading button { border:0; color:#53675c; background:transparent; font-size:26px; cursor:pointer; }
+.folder-picker-current { margin:16px 0 10px; padding:10px; border-radius:7px; color:#40564b; background:#f3f6f2; font:12px/1.5 Consolas,monospace; overflow-wrap:anywhere; }
+.folder-picker-actions button { padding:9px 12px; border:1px solid #dce2dd; border-radius:7px; color:#40564b; background:#fff; cursor:pointer; }
+.folder-picker-actions button[data-folder-select] { margin-left:auto; border-color:#17644f; color:#fff; background:#17644f; }
+.folder-picker-actions button:disabled { opacity:.5; cursor:not-allowed; }
+.folder-picker-status { min-height:20px; margin:10px 0; color:#718078; font-size:12px; }
+.folder-picker-list { max-height: min(48vh,430px); overflow:auto; border:1px solid #e1e7e2; border-radius:8px; }
+.folder-picker-entry { width:100%; padding:11px 12px; display:flex; align-items:center; gap:10px; border:0; border-bottom:1px solid #edf0ed; color:#304239; background:#fff; text-align:left; cursor:pointer; }
+.folder-picker-entry:hover { background:#eff6ef; }
+.folder-picker-entry span:nth-child(2) { flex:1; overflow-wrap:anywhere; }
+.folder-picker-entry strong { padding:3px 7px; border-radius:5px; color:#27634a; background:#e8f5e9; font-size:10px; }
+.folder-picker-target { min-height:40px; padding:9px 14px; display:inline-flex; align-items:center; justify-content:center; gap:8px; border:1px solid #17644f; border-radius:8px; color:#17644f; background:#eef6ef; font:600 13px/1.2 "Segoe UI Variable","Aptos","Segoe UI",sans-serif; cursor:pointer; transition:background .15s ease,box-shadow .15s ease,transform .15s ease; }
+.folder-picker-target::before { content:"▰"; font-size:15px; line-height:1; }
+.folder-picker-target:hover { background:#e2f0e5; box-shadow:0 2px 6px #17644f20; }
+.folder-picker-target:active { transform:translateY(1px); }
+.folder-picker-target:focus-visible { outline:3px solid #70ae87; outline-offset:2px; }

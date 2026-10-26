@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#173c36">
+  <title>Todo Graph · Кандидаты на задачи</title>
+  <link rel="stylesheet" href="/agent.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="wordmark" href="/" aria-label="Todo Graph"><span class="mark">t<span>·</span>g</span><span>todo<span class="wordmark-light">graph</span></span></a>
+    <div class="topbar-right"><span class="connection"><i></i> Граф активен</span><span class="topbar-divider"></span><a class="back-link" href="/graph.html">Полный граф</a><a class="back-link" href="/projects.html">Проекты</a><a class="back-link" href="/index.html" aria-current="page">Кандидаты</a><a class="back-link" href="/settings.html">Настройки</a><span class="user-mark" aria-label="Пользователь">А</span></div>
+  </header>
+
+  <main class="app-shell">
+    <aside class="queue-rail">
+      <div class="rail-heading"><div><span class="eyebrow">Входящие</span><h2>Очередь кандидатов</h2></div><span class="count-badge" id="queue-count">—</span></div>
+      <p class="rail-copy">Одобренные в Boy Scout кандидаты ждут проверки контекста и решения.</p>
+      <div class="queue-list" id="queue"><div class="queue-state">Загружаю кандидатов…</div></div>
+      <div class="rail-foot"><span class="status-dot"></span> Связи и задачи появляются после подтверждения</div>
+    </aside>
+
+    <section class="work-area" id="workspace" aria-live="polite">
+      <div class="welcome panel">
+        <div class="welcome-orbit" aria-hidden="true"><span></span><i></i><b></b></div>
+        <span class="eyebrow">Кандидат → контекст графа → решение</span>
+        <h1>Сначала понять,<br>потом связывать.</h1>
+        <p>Выберите кандидата слева. Агент изучит узлы и связи, а вы проверите его маршрут и подтвердите подходящие отношения.</p>
+        <div class="welcome-note"><span>01</span> Очередь кандидатов и граф работают на одном экране</div>
+      </div>
+    </section>
+  </main>
+  <script>if (location.pathname === '/') location.replace('/projects.html');</script>
+  <script src="/agent.js" defer></script>
+</body>
+</html>

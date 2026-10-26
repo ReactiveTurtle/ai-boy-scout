@@ -13,5 +13,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\BoyScout.Api\BoyScout.Api.csproj" />
     <ProjectReference Include="..\..\src\BoyScout.Core\BoyScout.Core.csproj" />
+    <ProjectReference Include="..\..\todo-graph\TodoGraph.csproj" />
   </ItemGroup>
 </Project>
