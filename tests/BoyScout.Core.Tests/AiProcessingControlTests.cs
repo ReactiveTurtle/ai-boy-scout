@@ -1,6 +1,7 @@
 using BoyScout.Api.Ai;
-using BoyScout.Core.Automation;
-using BoyScout.Core.Storage;
+using BoyScout.Application.Automation;
+using BoyScout.Infrastructure.Automation;
+using BoyScout.Infrastructure.Persistence;
 using Xunit;
 
 namespace BoyScout.Core.Tests;

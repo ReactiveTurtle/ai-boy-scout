@@ -12,7 +12,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\BoyScout.Api\BoyScout.Api.csproj" />
-    <ProjectReference Include="..\..\src\BoyScout.Core\BoyScout.Core.csproj" />
-    <ProjectReference Include="..\..\todo-graph\TodoGraph.csproj" />
+    <ProjectReference Include="..\..\src\BoyScout.Domain\BoyScout.Domain.csproj" />
+    <ProjectReference Include="..\..\src\BoyScout.Application\BoyScout.Application.csproj" />
+    <ProjectReference Include="..\..\src\BoyScout.Infrastructure\BoyScout.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Common\BoyScout.Common.csproj" />
   </ItemGroup>
 </Project>

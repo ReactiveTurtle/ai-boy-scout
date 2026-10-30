@@ -31,6 +31,10 @@ Open `http://127.0.0.1:5187`. The site and API bind to loopback only. Keep the s
 
 The site opens to the Projects chooser. Enter a project to work with its own Notes, Tasks and storage settings; use the **Projects** action to return to the chooser. Repository shortcuts with `projectPath` open the matching project directly.
 
+## TodoGraph microservice
+
+TodoGraph runs as a separate ASP.NET Core service on `http://127.0.0.1:5207`; start it with `npm run start:todo-graph`. Its layers are `TodoGraph.Domain`, `TodoGraph.Application` (CQRS), `TodoGraph.Infrastructure` (EF Core SQLite), and `TodoGraph.Api` (minimal endpoints and SignalR). The initial project API supports `GET`/`POST /api/projects`; project creation broadcasts `ProjectCreated` on `/hubs/projects`. Set `TODO_GRAPH_DB` to override the new database path; the default is `%LOCALAPPDATA%\todo-graph-v2\todo-graph.db`.
+
 ### Install MCP in a project repository
 
 1. Publish the MCP from the Boy Scout checkout with `npm run publish:mcp`.
@@ -107,7 +111,7 @@ Select a project to open its settings for AI access, repository setup, remote pa
 
 With credentials saved and a remote project bound to a local path, a local note detail panel can also copy one note to Firebase independently of project activation. This copies the note's fields, status and timestamps only; its proposal and task are not copied, and the local note is not deleted. The import is idempotent, so retrying it does not create a duplicate.
 
-The panel can preview a local project's complete v12 data graph: report, proposal, task and link counts plus a deterministic snapshot checksum. This preview is read-only and separate from per-note copy. The production worker claims consented Firebase notes under per-note leases and persists outcomes with project-root CAS; Firebase decisions and tasks remain remote while older SQLite records remain local.
+The panel can preview a local project's complete v16 data graph: report, proposal, task and link counts plus a deterministic snapshot checksum. This preview is read-only and separate from per-note copy. The production worker claims consented Firebase notes under per-note leases and persists outcomes with project-root CAS; Firebase decisions and tasks remain remote while older SQLite records remain local.
 
 1. MCP records a raw note in SQLite by default, or in Firebase when that local project has explicitly completed activation.
 2. A read-only OpenCode agent checks whether the finding still exists in the current project.
@@ -154,4 +158,4 @@ The database can also be opened with a SQLite client at `%LOCALAPPDATA%\boy-scou
 - `.opencode/opencode.triage.json` defines the read-only relevance and task-draft agent.
 - `opencode/skills` contains the globally registered Boy Scout skill.
 
-Schema version 12 preserves v11 data and adds optional current-consequence fields to proposals and tasks. Legacy rows remain without inferred consequences, authors or decision times. Configure the local BoyScout name and Firebase service-account fields in the site; the service-account key is stored in the per-user config, DPAPI-protected on Windows. Firebase writes remain off until an individual bound project completes preflight and explicit confirmation. Per-project AI-read consent remains required before a queued Firebase note can be claimed. Before any future bulk migration, run `npm run backup:db`. Publish server changes with `npm run publish:mcp` before restarting OpenCode.
+Schema versions 13 and 15 remain in the migration chain for existing databases. Version 14 groups Git worktrees under one project and merges local notes, tasks and paths into the project with the oldest ID without transferring AI access from duplicates. Version 16 records local note copies in Firebase. Version 17 removes retired delivery tracking while preserving reports and Firebase transfer markers; old reports retain their stored Boy Scout status. Configure the local BoyScout name and Firebase service-account fields in the site; the key is DPAPI-protected on Windows. Firebase writes remain off until explicit project preflight and confirmation, and per-project AI-read consent is required before a queued note can be claimed. Before any future bulk migration, run `npm run backup:db`. Publish server changes with `npm run publish:mcp` before restarting OpenCode.

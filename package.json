@@ -12,7 +12,7 @@
     "build:web": "npm --prefix web-ui run build",
     "publish:ui": "npm run build:web && dotnet publish src/BoyScout.Api/BoyScout.Api.csproj --configuration Release --output artifacts/api",
     "start:ui": "dotnet artifacts/api/BoyScout.Api.dll --contentRoot . --urls http://127.0.0.1:5187",
-    "start:todo-graph": "dotnet run --project todo-graph --urls http://127.0.0.1:5207",
+    "start:todo-graph": "dotnet run --project src/TodoGraph.Api --urls http://127.0.0.1:5207",
     "backup:db": "node scripts/backup-database.mjs",
     "verify:migration": "node scripts/verify-migration.mjs",
     "test": "dotnet test BoyScout.sln && npm run test:mcp",

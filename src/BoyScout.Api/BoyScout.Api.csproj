@@ -1,5 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
-    <ProjectReference Include="..\BoyScout.Core\BoyScout.Core.csproj" />
+    <ProjectReference Include="..\BoyScout.Domain\BoyScout.Domain.csproj" />
+    <ProjectReference Include="..\BoyScout.Application\BoyScout.Application.csproj" />
+    <ProjectReference Include="..\BoyScout.Infrastructure\BoyScout.Infrastructure.csproj" />
+    <ProjectReference Include="..\Common\BoyScout.Common.csproj" />
   </ItemGroup>
 </Project>

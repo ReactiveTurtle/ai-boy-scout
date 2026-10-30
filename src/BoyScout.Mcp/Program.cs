@@ -1,6 +1,11 @@
-using BoyScout.Core.Reports;
-using BoyScout.Core.Storage;
-using BoyScout.Core.Storage.Config;
+using BoyScout.Application.Reports;
+using BoyScout.Application.Tasks;
+using BoyScout.Domain.Reports;
+using BoyScout.Domain.Tasks;
+using BoyScout.Infrastructure.Reports;
+using BoyScout.Infrastructure.Tasks;
+using BoyScout.Infrastructure.Persistence;
+using BoyScout.Infrastructure.Configuration;
 using BoyScout.Mcp.Tools;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -21,6 +26,7 @@ database.Migrate();
 
 builder.Services.AddSingleton(database);
 builder.Services.AddSingleton<IReportStore>(_ => new ReportStore(database, config));
+builder.Services.AddSingleton<ITaskStore>(_ => new TaskStore(database, config));
 builder.Services
     .AddMcpServer()
     .WithStdioServerTransport()

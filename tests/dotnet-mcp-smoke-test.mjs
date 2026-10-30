@@ -108,7 +108,7 @@ try {
     }),
   );
   if (updated.status !== "accepted") {
-    throw new Error("boy_scout_update_status did not persist the new status");
+    throw new Error(`boy_scout_update_status returned an unexpected status: ${JSON.stringify(updated)}`);
   }
 
   const missing = await client.callTool({
@@ -124,13 +124,19 @@ try {
 
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
-    if (database.prepare("PRAGMA user_version").get().user_version !== 12) {
-      throw new Error("The .NET MCP did not migrate the legacy database to version 12");
+    if (database.prepare("PRAGMA user_version").get().user_version !== 17) {
+      throw new Error("The .NET MCP did not migrate the legacy database to version 17");
     }
     if (database.prepare("SELECT COUNT(*) AS count FROM reports WHERE project_id IS NULL").get().count !== 0) {
       throw new Error("The .NET MCP left reports without stable projects");
     }
-    for (const table of ["task_proposals", "tasks", "report_tasks", "project_ai_access"]) {
+    if (
+      database.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'todo_graph_deliveries'").get().count !== 0 ||
+      database.prepare("SELECT status FROM reports WHERE sequence = 2").get().status !== "accepted"
+    ) {
+      throw new Error("The .NET MCP retained retired delivery state or changed the Boy Scout report status");
+    }
+    for (const table of ["task_proposals", "tasks", "report_tasks", "project_ai_access", "firebase_note_transfers"]) {
       if (
         database
           .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?")

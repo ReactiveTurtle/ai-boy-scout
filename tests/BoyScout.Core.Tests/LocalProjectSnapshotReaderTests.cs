@@ -1,5 +1,5 @@
-using BoyScout.Core.Storage;
-using BoyScout.Core.Storage.Migration;
+using BoyScout.Infrastructure.Persistence;
+using BoyScout.Infrastructure.Persistence.Migration;
 using Microsoft.Data.Sqlite;
 using Xunit;
 

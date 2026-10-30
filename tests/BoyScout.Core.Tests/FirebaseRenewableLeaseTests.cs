@@ -1,6 +1,6 @@
 using System.Net;
 using System.Text.Json;
-using BoyScout.Core.Storage.Firebase;
+using BoyScout.Infrastructure.Firebase;
 using Xunit;
 
 namespace BoyScout.Core.Tests;

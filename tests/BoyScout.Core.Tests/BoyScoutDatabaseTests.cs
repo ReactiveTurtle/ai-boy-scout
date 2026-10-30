@@ -1,9 +1,18 @@
-using BoyScout.Core.Automation;
-using BoyScout.Core.Storage;
-using BoyScout.Core.Storage.Config;
-using BoyScout.Core.Reports;
-using BoyScout.Core.Tasks;
+using BoyScout.Application.Reports;
+using BoyScout.Application.Tasks;
+using BoyScout.Application.Automation;
+using BoyScout.Infrastructure.Automation;
+using BoyScout.Infrastructure.Persistence;
+using BoyScout.Infrastructure.Persistence.Repositories;
+using BoyScout.Infrastructure.Configuration;
+using BoyScout.Infrastructure.Reports;
+using BoyScout.Infrastructure.Tasks;
 using BoyScout.Api.Ai;
+using BoyScout.Domain.Reports;
+using BoyScout.Domain.Tasks;
+using BoyScout.Application.Projects;
+using BoyScout.Infrastructure.Projects;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Data.Sqlite;
 using Xunit;
 
@@ -79,9 +88,176 @@ public sealed class BoyScoutDatabaseTests
         Assert.Null(store.GetProposalForReport("BSR-000001")!.CurrentConsequences);
         Assert.Null(Assert.Single(store.ListTasks()).CurrentConsequences);
         using var verification = fixture.OpenConnection();
-        Assert.Equal(12L, Scalar<long>(verification, "PRAGMA user_version;"));
+        Assert.Equal(17L, Scalar<long>(verification, "PRAGMA user_version;"));
         Assert.Equal(1L, Scalar<long>(verification,
             "SELECT COUNT(*) FROM schema_migrations WHERE version = 12 AND name = 'task_current_consequences';"));
+        Assert.Equal(1L, Scalar<long>(verification,
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 13 AND name = 'todo_graph_delivery_status';"));
+    }
+
+    [Fact]
+    public void Version_seventeen_removes_legacy_delivery_state_and_preserves_boy_scout_data()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var store = new ReportStore(database);
+        var report = store.UpdateStatus(store.Add(NewReport(fixture.DirectoryPath, "Finding", "Observation")).Id,
+            ReportStatuses.Accepted)!;
+        store.MarkTransferredToFirebase(report.Id, "BSR-42-0000000000000000001");
+        using (var connection = fixture.OpenConnection())
+        {
+            Execute(connection,
+                "CREATE TABLE todo_graph_deliveries (report_id TEXT NOT NULL PRIMARY KEY, sent_at TEXT NOT NULL, source_status TEXT); INSERT INTO todo_graph_deliveries VALUES ('BSR-000001', 'sent-at', 'accepted'); DELETE FROM schema_migrations WHERE version = 17; PRAGMA user_version = 16;");
+        }
+
+        database.Migrate();
+
+        Assert.Equal(ReportStatuses.Accepted, store.Get(report.Id)!.Status);
+        Assert.Equal("BSR-42-0000000000000000001", store.Get(report.Id)!.FirebaseNoteId);
+        using var verification = fixture.OpenConnection();
+        Assert.Equal(17L, Scalar<long>(verification, "PRAGMA user_version;"));
+        Assert.Equal(1L, Scalar<long>(verification,
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 17 AND name = 'remove_legacy_delivery_tracking';"));
+        Assert.Equal(0L, Scalar<long>(verification,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'todo_graph_deliveries';"));
+        Assert.Equal(1L, Scalar<long>(verification,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'firebase_note_transfers';"));
+    }
+
+    [Fact]
+    public void Firebase_copy_marker_persists_and_is_returned_with_the_local_note()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var store = new ReportStore(database);
+        var report = store.Add(NewReport(fixture.DirectoryPath, "Finding", "Observation"));
+
+        var transferred = store.MarkTransferredToFirebase(report.Id, "BSR-42-0000000000000000001")!;
+
+        Assert.Equal("BSR-42-0000000000000000001", transferred.FirebaseNoteId);
+        Assert.NotNull(transferred.FirebaseTransferredAt);
+        Assert.Equal(transferred, store.Get(report.Id));
+        Assert.Equal(transferred, Assert.Single(store.BrowseNotes(null, null, null, null, null, 10).Items));
+        Assert.Equal(transferred, Assert.Single(store.List(null, null, 10)));
+        Assert.Equal(transferred.FirebaseTransferredAt,
+            store.MarkTransferredToFirebase(report.Id, transferred.FirebaseNoteId!)!.FirebaseTransferredAt);
+    }
+
+    [Fact]
+    public void Git_worktrees_register_under_one_project_and_proposals_use_primary_path()
+    {
+        using var fixture = new DatabaseFixture();
+        var (root, worktree) = CreateGitWorktree(fixture);
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var store = new ReportStore(database);
+
+        var primary = store.CreateProject("sample", root);
+        var fromWorktree = store.CreateProject("worktree copy", worktree);
+        var report = store.Add(NewReport(worktree, "Worktree finding", "Observed in linked worktree"));
+
+        Assert.Equal(primary.Id, fromWorktree.Id);
+        Assert.Equal(primary.Id, report.ProjectId);
+        Assert.Equal(worktree, report.Project);
+        var listed = Assert.Single(store.ListProjects());
+        Assert.Equal(root, listed.PrimaryPath);
+        Assert.Equal(1, listed.ReportCount);
+        Assert.True(store.SetAiAccess(primary.Id, true));
+        var proposal = new TaskStore(database).TryClaimNextProposal()!;
+        Assert.Equal(root, proposal.ReportProject);
+    }
+
+    [Fact]
+    public async Task EfProjectStorePreservesGitIdentityPrimaryPathReportCountsAndAiConsent()
+    {
+        using var fixture = new DatabaseFixture();
+        var (root, worktree) = CreateGitWorktree(fixture);
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var options = new DbContextOptionsBuilder<BoyScoutDbContext>()
+            .UseSqlite($"Data Source={fixture.DatabasePath}")
+            .Options;
+        await using var context = new BoyScoutDbContext(options);
+        var projectStore = new ProjectStore(new EfProjectRepository(context), new GitRepositoryIdentityResolver(), new EfUnitOfWork(context));
+        var token = TestContext.Current.CancellationToken;
+
+        var primary = await projectStore.ResolveOrCreateProjectAsync("sample", root, token);
+        var samePrimary = await projectStore.ResolveOrCreateProjectAsync("renamed", root, token);
+        var alias = await projectStore.ResolveOrCreateProjectAsync("worktree copy", worktree, token);
+        var sameAlias = await projectStore.ResolveOrCreateProjectAsync("renamed worktree", worktree, token);
+        Assert.Equal(primary.Id, alias.Id);
+        Assert.Equal(primary.Id, samePrimary.Id);
+        Assert.Equal(primary.Id, sameAlias.Id);
+        Assert.Equal(root, alias.PrimaryPath);
+        Assert.Single(await projectStore.ListProjectsAsync(token));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => projectStore.CreateProjectAsync("duplicate", worktree, token));
+
+        var reports = new ReportStore(database);
+        reports.Add(NewReport(worktree, "Worktree finding", "Observed in linked worktree"));
+        var listed = Assert.Single(await projectStore.ListProjectsAsync(token));
+        Assert.Equal(root, listed.PrimaryPath);
+        Assert.Equal(1, listed.ReportCount);
+        Assert.Equal(1, listed.OpenCount);
+        Assert.False((await projectStore.GetAiAccessAsync(primary.Id, token))!.Value);
+
+        Assert.True(await projectStore.SetAiAccessAsync(primary.Id, true, token));
+        Assert.True((await projectStore.GetAiAccessAsync(primary.Id, token))!.Value);
+    }
+
+    [Fact]
+    public void Migration_merges_existing_worktree_projects_and_local_rows_into_oldest_project()
+    {
+        using var fixture = new DatabaseFixture();
+        var (root, worktree) = CreateGitWorktree(fixture);
+        var database = new BoyScoutDatabase(fixture.DatabasePath);
+        database.Migrate();
+        var store = new ReportStore(database);
+        var primary = store.CreateProject("primary", root);
+        var report = store.Add(NewReport(root, "Finding", "Observed"));
+        long duplicateId;
+        using (var connection = fixture.OpenConnection())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                "INSERT INTO projects (name, created_at, updated_at) VALUES ('duplicate', 't', 't') RETURNING id;";
+            duplicateId = (long)command.ExecuteScalar()!;
+            command.CommandText = "INSERT INTO project_paths (project_id, path, is_primary, created_at) VALUES ($id, $path, 1, 't');";
+            command.Parameters.AddWithValue("$id", duplicateId);
+            command.Parameters.AddWithValue("$path", worktree);
+            command.ExecuteNonQuery();
+            command.Parameters.Clear();
+            command.CommandText = "UPDATE reports SET project_id = $duplicate, project = $path WHERE sequence = 1;";
+            command.Parameters.AddWithValue("$duplicate", duplicateId);
+            command.Parameters.AddWithValue("$path", worktree);
+            command.ExecuteNonQuery();
+            command.Parameters.Clear();
+            command.CommandText = "INSERT INTO tasks (project_id, title, description, acceptance_criteria, status, created_at, updated_at) VALUES ($id, 'Task', 'Description', 'Criteria', 'todo', 't', 't');";
+            command.Parameters.AddWithValue("$id", duplicateId);
+            command.ExecuteNonQuery();
+            command.Parameters.Clear();
+            command.CommandText = "INSERT INTO project_ai_access (project_id, granted_at) VALUES ($id, 't');";
+            command.Parameters.AddWithValue("$id", duplicateId);
+            command.ExecuteNonQuery();
+            command.Parameters.Clear();
+            command.CommandText = "DROP TABLE firebase_note_transfers; CREATE TABLE todo_graph_deliveries (report_id TEXT NOT NULL PRIMARY KEY, sent_at TEXT NOT NULL, source_status TEXT); DELETE FROM schema_migrations WHERE version = 17; DELETE FROM schema_migrations WHERE version = 16; PRAGMA user_version = 15; ALTER TABLE todo_graph_deliveries DROP COLUMN source_status; DELETE FROM schema_migrations WHERE version = 15; PRAGMA user_version = 14; DELETE FROM schema_migrations WHERE version = 14; PRAGMA user_version = 13;";
+            command.ExecuteNonQuery();
+        }
+
+        database.Migrate();
+
+        Assert.Equal(primary.Id, store.Get(report.Id)!.ProjectId);
+        Assert.Equal(worktree, store.Get(report.Id)!.Project);
+        Assert.Equal(root, Assert.Single(store.ListProjects()).PrimaryPath);
+        Assert.Equal(primary.Id, Assert.Single(new TaskStore(database).ListTasks()).ProjectId);
+        Assert.False(store.GetAiAccess(primary.Id));
+        using var verification = fixture.OpenConnection();
+        Assert.Equal(2L, Scalar<long>(verification, "SELECT COUNT(*) FROM projects;"));
+        Assert.Equal(17L, Scalar<long>(verification, "PRAGMA user_version;"));
+        Assert.Equal(1L, Scalar<long>(verification, "SELECT COUNT(*) FROM schema_migrations WHERE version = 14 AND name = 'merge_git_worktrees';"));
+        Assert.Equal(1L, Scalar<long>(verification, "SELECT COUNT(*) FROM schema_migrations WHERE version = 15 AND name = 'todo_graph_primary_status';"));
+        Assert.Equal(1L, Scalar<long>(verification, "SELECT COUNT(*) FROM schema_migrations WHERE version = 16 AND name = 'firebase_note_transfer_markers';"));
     }
 
     [Fact]
@@ -156,8 +332,8 @@ public sealed class BoyScoutDatabaseTests
         Assert.Null(oldTask.ConfirmerName);
         Assert.Null(oldTask.ConfirmerInstallationId);
         using var verification = fixture.OpenConnection();
-        Assert.Equal(12L, Scalar<long>(verification, "PRAGMA user_version;"));
-        Assert.Equal(12L, Scalar<long>(verification, "SELECT COUNT(*) FROM schema_migrations;"));
+        Assert.Equal(17L, Scalar<long>(verification, "PRAGMA user_version;"));
+        Assert.Equal(17L, Scalar<long>(verification, "SELECT COUNT(*) FROM schema_migrations;"));
     }
 
     [Fact]
@@ -190,8 +366,8 @@ public sealed class BoyScoutDatabaseTests
             Assert.Null(proposal.HumanRejectedAt);
         }
         using var connection = fixture.OpenConnection();
-        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
-        Assert.Equal(12L, Scalar<long>(connection, "SELECT COUNT(*) FROM schema_migrations;"));
+        Assert.Equal(17L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(17L, Scalar<long>(connection, "SELECT COUNT(*) FROM schema_migrations;"));
         Assert.Equal(1L, Scalar<long>(connection,
             "SELECT COUNT(*) FROM schema_migrations WHERE version = 11 AND name = 'proposal_decision_timestamps';"));
     }
@@ -549,9 +725,9 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var connection = fixture.OpenConnection();
-        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(17L, Scalar<long>(connection, "PRAGMA user_version;"));
         Assert.Equal("wal", Scalar<string>(connection, "PRAGMA journal_mode;"));
-        Assert.Equal(12L, Scalar<long>(connection, "SELECT COUNT(*) FROM schema_migrations;"));
+        Assert.Equal(17L, Scalar<long>(connection, "SELECT COUNT(*) FROM schema_migrations;"));
         Assert.Equal(0L, Scalar<long>(connection, "SELECT COUNT(*) FROM reports;"));
         Assert.Equal(0L, Scalar<long>(connection, "SELECT COUNT(*) FROM projects;"));
         Assert.Equal(0L, Scalar<long>(connection, "SELECT COUNT(*) FROM task_proposals;"));
@@ -620,7 +796,7 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var connection = fixture.OpenConnection();
-        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(17L, Scalar<long>(connection, "PRAGMA user_version;"));
         Assert.Equal(1L, Scalar<long>(connection, "SELECT COUNT(*) FROM reports;"));
         Assert.Equal(168L, Scalar<long>(connection, "SELECT MAX(sequence) FROM reports;"));
         Assert.Equal(1L, Scalar<long>(connection, "SELECT COUNT(*) FROM projects;"));
@@ -655,7 +831,7 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var connection = fixture.OpenConnection();
-        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(17L, Scalar<long>(connection, "PRAGMA user_version;"));
         Assert.Equal(1L, Scalar<long>(connection, "SELECT COUNT(*) FROM reports;"));
         Assert.Equal(
             report.Title,
@@ -704,7 +880,7 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var verificationConnection = fixture.OpenConnection();
-        Assert.Equal(12L, Scalar<long>(verificationConnection, "PRAGMA user_version;"));
+        Assert.Equal(17L, Scalar<long>(verificationConnection, "PRAGMA user_version;"));
         Assert.Equal(
             1L,
             Scalar<long>(
@@ -746,7 +922,7 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var connection = fixture.OpenConnection();
-        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(17L, Scalar<long>(connection, "PRAGMA user_version;"));
         Assert.Equal(report.Title, Scalar<string>(connection, "SELECT title FROM reports WHERE sequence = 1;"));
         Assert.Equal(0L, Scalar<long>(connection, "SELECT COUNT(*) FROM project_ai_access;"));
         Assert.Equal(
@@ -792,7 +968,7 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var connection = fixture.OpenConnection();
-        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(17L, Scalar<long>(connection, "PRAGMA user_version;"));
         Assert.Equal(
             1L,
             Scalar<long>(
@@ -824,7 +1000,7 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var connection = fixture.OpenConnection();
-        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(17L, Scalar<long>(connection, "PRAGMA user_version;"));
         Assert.Equal(
             1L,
             Scalar<long>(
@@ -855,7 +1031,7 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var connection = fixture.OpenConnection();
-        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(17L, Scalar<long>(connection, "PRAGMA user_version;"));
         Assert.Equal(
             1L,
             Scalar<long>(
@@ -924,7 +1100,7 @@ public sealed class BoyScoutDatabaseTests
         database.Migrate();
 
         using var connection = fixture.OpenConnection();
-        Assert.Equal(12L, Scalar<long>(connection, "PRAGMA user_version;"));
+        Assert.Equal(17L, Scalar<long>(connection, "PRAGMA user_version;"));
         Assert.Equal(
             TaskProposalRecommendedActions.CreateTask,
             Scalar<string>(connection, $"SELECT recommended_action FROM task_proposals WHERE id = {current.Id};"));
@@ -2798,6 +2974,46 @@ public sealed class BoyScoutDatabaseTests
     private static CreateReport NewReport(string project, string title, string observation) =>
         new(project, title, null, observation, "Known impact", "Review separately", "core-test");
 
+    private static (string Root, string Worktree) CreateGitWorktree(DatabaseFixture fixture)
+    {
+        var parent = fixture.DirectoryPath;
+        var root = Path.Combine(parent, "sample-repository");
+        var worktree = Path.Combine(parent, "sample-repository-worktree");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "README.md"), "sample");
+        RunGit(root, "init");
+        RunGit(root, "config", "user.name", "Boy Scout Tests");
+        RunGit(root, "config", "user.email", "tests@example.invalid");
+        RunGit(root, "add", "README.md");
+        RunGit(root, "commit", "-m", "initial commit");
+        RunGit(root, "worktree", "add", "-b", "worktree-test", worktree);
+        fixture.RegisterGitWorktree(root, worktree);
+        return (root, worktree);
+    }
+
+    private static void RunGit(string workingDirectory, params string[] arguments)
+    {
+        var startInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        using var process = System.Diagnostics.Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start git for worktree test.");
+        if (!process.WaitForExit(20_000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException("Git worktree test command timed out.");
+        }
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"Git worktree test command failed: {process.StandardError.ReadToEnd()}");
+    }
+
     private static void GrantAiAccess(ReportStore store)
     {
         var project = Assert.Single(store.ListProjects());
@@ -2806,11 +3022,15 @@ public sealed class BoyScoutDatabaseTests
 
     private sealed class DatabaseFixture : IDisposable
     {
+        private readonly List<(string Root, string Worktree)> gitWorktrees = [];
+
         public string DirectoryPath { get; } = Path.Combine(
             Path.GetTempPath(),
             $"boy-scout-core-tests-{Guid.NewGuid():N}");
 
         public string DatabasePath => Path.Combine(DirectoryPath, "reports.db");
+
+        public void RegisterGitWorktree(string root, string worktree) => gitWorktrees.Add((root, worktree));
 
         public SqliteConnection OpenConnection()
         {
@@ -2907,7 +3127,38 @@ public sealed class BoyScoutDatabaseTests
         public void DowngradeToVersionEleven()
         {
             using var connection = OpenConnection();
-            if (Scalar<long>(connection, "PRAGMA user_version;") != 12) return;
+            var version = Scalar<long>(connection, "PRAGMA user_version;");
+            if (version == 17)
+            {
+                Execute(connection,
+                    "CREATE TABLE todo_graph_deliveries (report_id TEXT NOT NULL PRIMARY KEY, sent_at TEXT NOT NULL, source_status TEXT); DELETE FROM schema_migrations WHERE version = 17; PRAGMA user_version = 16;");
+                version = 16;
+            }
+            if (version == 16)
+            {
+                Execute(connection,
+                    "DROP TABLE firebase_note_transfers; DELETE FROM schema_migrations WHERE version = 16; PRAGMA user_version = 15;");
+                version = 15;
+            }
+            if (version == 15)
+            {
+                Execute(connection,
+                    "ALTER TABLE todo_graph_deliveries DROP COLUMN source_status; DELETE FROM schema_migrations WHERE version = 15; PRAGMA user_version = 14;");
+                version = 14;
+            }
+            if (version == 14)
+            {
+                Execute(connection,
+                    "DELETE FROM schema_migrations WHERE version = 14; PRAGMA user_version = 13;");
+                version = 13;
+            }
+            if (version == 13)
+            {
+                Execute(connection,
+                    "DROP TABLE todo_graph_deliveries; DELETE FROM schema_migrations WHERE version = 13; PRAGMA user_version = 12;");
+                version = 12;
+            }
+            if (version != 12) return;
             Execute(connection,
                 """
                 ALTER TABLE task_proposals DROP COLUMN current_consequences;
@@ -3228,8 +3479,12 @@ public sealed class BoyScoutDatabaseTests
         public void Dispose()
         {
             SqliteConnection.ClearAllPools();
+            foreach (var (root, worktree) in gitWorktrees)
+                RunGit(root, "worktree", "remove", "--force", worktree);
             if (Directory.Exists(DirectoryPath))
             {
+                foreach (var entry in Directory.EnumerateFileSystemEntries(DirectoryPath, "*", SearchOption.AllDirectories))
+                    File.SetAttributes(entry, FileAttributes.Normal);
                 Directory.Delete(DirectoryPath, recursive: true);
             }
         }

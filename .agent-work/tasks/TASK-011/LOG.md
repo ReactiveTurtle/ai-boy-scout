@@ -1,0 +1,21 @@
+# TASK-011 Action Log
+
+- User confirmed retirement scope includes all TodoGraph modules, legacy app/UI/tests, Angular TodoGraph UI, BoyScout contracts/publisher/status/API scenarios, and a new blank ASP.NET Core host in `todo-graph/`.
+- Inspected repository references and found active host PID 33620 on port 5207. It was left running; its current output may prevent removing/replacing `todo-graph/`.
+- Removed BoyScout publishing contract/publisher and MCP publish-on-accept behavior. Report status and UI filters no longer expose sent-to-TodoGraph state.
+- Added BoyScout schema v17 to drop legacy delivery tracking while preserving historical migrations and other report/Firebase data; updated snapshot validation, migration verification, and smoke tests.
+- Removed TodoGraph Angular routes/components and router dependency; BoyScout Angular remains the app root.
+- Targeted migration tests passed 2/2; full BoyScout.Core.Tests passed 296/296 after correcting v17 validation and historical downgrade fixtures.
+- BoyScout.Mcp build passed with 0 warnings/errors; MCP smoke test passed. Angular production build passed with a 363.65 kB initial bundle and the existing `app.scss` budget warning.
+- After the user authorized stopping it, stopped the old TodoGraph host PID 33620 and confirmed port 5207 is free.
+- Removed the old host directory, TodoGraph Domain/Application/Infrastructure modules, their test projects, and the Angular TodoGraph routes/components/toolbars. Recreated `todo-graph/` from the blank ASP.NET Core web template and added it back to the solution.
+- `dotnet restore BoyScout.sln --ignore-failed-sources` passed; full solution tests passed 296/296; full solution build passed with 0 warnings/errors.
+- Operationally ran the blank host on temporary port 5220; `GET /` returned HTTP 200 and `Hello World!`. The process was stopped. The existing BoyScout host on port 5187 (PID 77696) was left untouched.
+- Added a separate `src/TodoGraph.Domain` class library and referenced it from the blank host; it has no dependencies yet. Restore passed and the full solution builds with 0 warnings/errors.
+- Added `Common.Domain.BaseEntity` with generated stable `Guid Id`, and a `TodoGraph.Domain.Projects.Project` aggregate root. Recorded that project identity is internal and independent of display name, with required trimmed names; filesystem/source integration stays out of the entity. Domain tests passed 6/6 and the full solution built with 0 warnings/errors.
+- Added `Common.Domain.AggregateRoot : BaseEntity` and changed `Project` to derive from `AggregateRoot`; the Project test asserts the aggregate boundary. Focused domain tests passed 6/6 and the full solution build passed with 0 warnings/errors.
+- Added `Project.FullPath` as a required absolute path, with no filesystem check or canonicalization. On YAGNI feedback, removed the speculative rename operation and scaffold-only unit-test project; the full solution build passes with 0 warnings/errors.
+- The earlier Project test project was deleted per user direction; the current solution has no TodoGraph Domain unit-test project.
+- Added TodoGraph.Application CQRS command/query handlers and Host DI registration, EF Core SQLite Infrastructure with an initial migration, and a separate TodoGraph.Api using minimal endpoints and a SignalR ProjectHub. The old root host was removed, and the start script now runs `src/TodoGraph.Api`.
+- Operationally verified invalid-path rejection, EF create/list persistence, `ProjectCreated` SignalR delivery, and persistence after API restart using an isolated temporary database. The full solution build passed with 0 warnings/errors; the old user-local TodoGraph DB was not touched.
+- Created `src/TodoGraph.WebApp` as a separate Angular CLI 22.2.5 standalone app, with Angular Core packages resolved to 22.2.4 and generated tests skipped. Dependency install had no vulnerabilities and production build passed (217.10 kB initial bundle).

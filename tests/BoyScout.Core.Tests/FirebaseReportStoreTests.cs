@@ -1,9 +1,11 @@
 using System.Net;
 using System.Text.Json;
-using BoyScout.Core.Reports;
-using BoyScout.Core.Storage;
-using BoyScout.Core.Storage.Config;
-using BoyScout.Core.Storage.Firebase;
+using BoyScout.Application.Reports;
+using BoyScout.Infrastructure.Reports;
+using BoyScout.Infrastructure.Persistence;
+using BoyScout.Infrastructure.Configuration;
+using BoyScout.Infrastructure.Firebase;
+using BoyScout.Domain.Reports;
 using Microsoft.Data.Sqlite;
 using Xunit;
 

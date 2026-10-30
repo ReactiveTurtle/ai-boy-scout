@@ -1,6 +1,10 @@
-using BoyScout.Core.Reports;
-using BoyScout.Core.Storage;
-using BoyScout.Core.Tasks;
+using BoyScout.Application.Reports;
+using BoyScout.Application.Tasks;
+using BoyScout.Infrastructure.Reports;
+using BoyScout.Infrastructure.Persistence;
+using BoyScout.Infrastructure.Tasks;
+using BoyScout.Domain.Reports;
+using BoyScout.Domain.Tasks;
 using Microsoft.Data.Sqlite;
 using Xunit;
 

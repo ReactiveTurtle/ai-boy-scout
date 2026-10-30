@@ -110,6 +110,10 @@ try {
   const hasDecisionTimestamps = ["agent_checked_at", "human_approved_at", "human_rejected_at"]
     .every((column) => proposalColumns.includes(column));
   const consequencesMigrationCount = live.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 12 AND name = 'task_current_consequences'").get().count;
+  const worktreeMergeMigrationCount = live.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 14 AND name = 'merge_git_worktrees'").get().count;
+  const firebaseTransferMarkerMigrationCount = live.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 16 AND name = 'firebase_note_transfer_markers'").get().count;
+  const deliveryCleanupMigrationCount = live.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 17 AND name = 'remove_legacy_delivery_tracking'").get().count;
+  const legacyDeliveryTableCount = live.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'todo_graph_deliveries'").get().count;
   const hasConsequencesColumns = ["task_proposals", "tasks"].every((table) =>
     live.prepare(`PRAGMA table_info(${table})`).all().some((column) =>
       column.name === "current_consequences" && column.type.toUpperCase() === "TEXT" && column.notnull === 0,
@@ -124,7 +128,7 @@ try {
     .get()?.value;
 
   if (
-    userVersion !== 12 ||
+    userVersion !== 17 ||
     orphanReports !== 0 ||
     foreignKeyErrors !== 0 ||
     triggerCount !== 1 ||
@@ -140,6 +144,10 @@ try {
     decisionTimestampMigrationCount !== 1 ||
     !hasDecisionTimestamps ||
     consequencesMigrationCount !== 1 ||
+    worktreeMergeMigrationCount !== 1 ||
+    firebaseTransferMarkerMigrationCount !== 1 ||
+    deliveryCleanupMigrationCount !== 1 ||
+    legacyDeliveryTableCount !== 0 ||
     !hasConsequencesColumns ||
     !hasReviewRequestColumns ||
     !hasDecisionColumns ||
@@ -147,7 +155,7 @@ try {
     !["true", "false"].includes(aiProcessingEnabled)
   ) {
     throw new Error(
-      `Invalid migrated schema: version=${userVersion}, orphans=${orphanReports}, foreignKeyErrors=${foreignKeyErrors}, trigger=${triggerCount}, taskMigration=${taskMigrationCount}, relevanceMigration=${relevanceMigrationCount}, accessMigration=${accessMigrationCount}, rejectionReviewMigration=${rejectionReviewMigrationCount}, queuedProposalMigration=${queuedProposalMigrationCount}, clarificationMigration=${clarificationMigrationCount}, humanDecisionMigration=${humanDecisionMigrationCount}, consequencesMigration=${consequencesMigrationCount}, consequencesColumns=${hasConsequencesColumns}, reviewRequestColumns=${hasReviewRequestColumns}, decisionColumns=${hasDecisionColumns}, queuedState=${proposalTableSql?.includes("'queued'")}, aiProcessing=${aiProcessingEnabled}`,
+      `Invalid migrated schema: version=${userVersion}, orphans=${orphanReports}, foreignKeyErrors=${foreignKeyErrors}, trigger=${triggerCount}, taskMigration=${taskMigrationCount}, relevanceMigration=${relevanceMigrationCount}, accessMigration=${accessMigrationCount}, rejectionReviewMigration=${rejectionReviewMigrationCount}, queuedProposalMigration=${queuedProposalMigrationCount}, clarificationMigration=${clarificationMigrationCount}, humanDecisionMigration=${humanDecisionMigrationCount}, consequencesMigration=${consequencesMigrationCount}, worktreeMergeMigration=${worktreeMergeMigrationCount}, firebaseTransferMarkerMigration=${firebaseTransferMarkerMigrationCount}, deliveryCleanupMigration=${deliveryCleanupMigrationCount}, obsoleteDeliveryTable=${legacyDeliveryTableCount}, consequencesColumns=${hasConsequencesColumns}, reviewRequestColumns=${hasReviewRequestColumns}, decisionColumns=${hasDecisionColumns}, queuedState=${proposalTableSql?.includes("'queued'")}, aiProcessing=${aiProcessingEnabled}`,
     );
   }
 

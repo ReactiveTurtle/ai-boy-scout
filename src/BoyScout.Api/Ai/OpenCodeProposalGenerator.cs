@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
-using BoyScout.Core.Tasks;
+using BoyScout.Domain.Tasks;
 
 namespace BoyScout.Api.Ai;
 
@@ -19,7 +19,7 @@ internal sealed class OpenCodeProposalGenerator(
         var startInfo = CreateStartInfo(workingDirectory);
         startInfo.ArgumentList.Add("run");
         startInfo.ArgumentList.Add("--title");
-        startInfo.ArgumentList.Add($"BoyScout: verification {proposal.ReportId}");
+        startInfo.ArgumentList.Add($"BoyScout: {proposal.ReportId} - {SessionTitleText(proposal.ReportTitle)}");
         startInfo.ArgumentList.Add("--format");
         startInfo.ArgumentList.Add("json");
         startInfo.ArgumentList.Add("--agent");
@@ -130,11 +130,11 @@ internal sealed class OpenCodeProposalGenerator(
             throw new InvalidOperationException("The proposal relevance is invalid.");
         }
 
-        var verificationSummary = ReadRequiredString(root, "verificationSummary");
-        var localizedReportTitle = ReadRequiredString(root, "localizedReportTitle");
-        var localizedReportObservation = ReadRequiredString(root, "localizedReportObservation");
-        var localizedReportImpact = ReadRequiredNullableString(root, "localizedReportImpact");
-        var localizedReportSuggestedAction = ReadRequiredNullableString(
+        var verificationSummary = ReadRequiredRussianString(root, "verificationSummary");
+        var localizedReportTitle = ReadRequiredRussianString(root, "localizedReportTitle");
+        var localizedReportObservation = ReadRequiredRussianString(root, "localizedReportObservation");
+        var localizedReportImpact = ReadRequiredRussianNullableString(root, "localizedReportImpact");
+        var localizedReportSuggestedAction = ReadRequiredRussianNullableString(
             root,
             "localizedReportSuggestedAction");
         if (relevance == TaskProposalRelevances.Current)
@@ -144,14 +144,14 @@ internal sealed class OpenCodeProposalGenerator(
                 ReadRequiredValue(root, "recommendedAction", TaskProposalRecommendedActions.CreateTask),
                 ReadRequiredNull(root, "finalRejectionReason"),
                 verificationSummary,
-                ReadRequiredString(root, "title"),
-                ReadRequiredString(root, "description"),
-                ReadRequiredString(root, "acceptanceCriteria"),
+                ReadRequiredRussianString(root, "title"),
+                ReadRequiredRussianString(root, "description"),
+                ReadRequiredRussianString(root, "acceptanceCriteria"),
                 localizedReportTitle,
                 localizedReportObservation,
                 localizedReportImpact,
                 localizedReportSuggestedAction,
-                ReadRequiredString(root, "currentConsequences"));
+                ReadRequiredRussianString(root, "currentConsequences"));
         }
 
         if (relevance == TaskProposalRelevances.Obsolete)
@@ -159,7 +159,7 @@ internal sealed class OpenCodeProposalGenerator(
             return new GeneratedProposal(
                 relevance,
                 ReadRequiredValue(root, "recommendedAction", TaskProposalRecommendedActions.Reject),
-                ReadRequiredString(root, "finalRejectionReason"),
+                ReadRequiredRussianString(root, "finalRejectionReason"),
                 verificationSummary,
                 ReadRequiredNull(root, "title"),
                 ReadRequiredNull(root, "description"),
@@ -289,6 +289,17 @@ internal sealed class OpenCodeProposalGenerator(
         return property.GetString()!;
     }
 
+    private static string ReadRequiredRussianString(JsonElement root, string name)
+    {
+        var value = ReadRequiredString(root, name);
+        if (!IsPredominantlyRussian(value))
+        {
+            throw new InvalidOperationException($"The proposal property '{name}' must be written in Russian.");
+        }
+
+        return value;
+    }
+
     private static string? ReadRequiredNull(JsonElement root, string name)
     {
         if (root.GetProperty(name).ValueKind != JsonValueKind.Null)
@@ -327,6 +338,21 @@ internal sealed class OpenCodeProposalGenerator(
         return property.GetString();
     }
 
+    private static string? ReadRequiredRussianNullableString(JsonElement root, string name)
+    {
+        var value = ReadRequiredNullableString(root, name);
+        return value is null ? null : IsPredominantlyRussian(value)
+            ? value
+            : throw new InvalidOperationException($"The proposal property '{name}' must be written in Russian.");
+    }
+
+    private static bool IsPredominantlyRussian(string value)
+    {
+        var letters = value.Count(char.IsLetter);
+        var cyrillic = value.Count(character => character is >= '\u0400' and <= '\u04FF');
+        return cyrillic >= 3 && cyrillic * 2 >= letters;
+    }
+
     private ProcessStartInfo CreateStartInfo(string workingDirectory)
     {
         var startInfo = new ProcessStartInfo
@@ -341,6 +367,12 @@ internal sealed class OpenCodeProposalGenerator(
         };
         startInfo.Environment["OPENCODE_CONFIG"] = options.ConfigPath;
         return startInfo;
+    }
+
+    private static string SessionTitleText(string title)
+    {
+        var normalized = string.Join(' ', title.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return normalized.Length <= 100 ? normalized : $"{normalized[..97]}...";
     }
 
     private static string FormatStandardError(string standardError)

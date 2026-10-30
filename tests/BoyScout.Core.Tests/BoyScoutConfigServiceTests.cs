@@ -1,5 +1,5 @@
 using System.Text.Json;
-using BoyScout.Core.Storage.Config;
+using BoyScout.Infrastructure.Configuration;
 using Xunit;
 
 namespace BoyScout.Core.Tests;

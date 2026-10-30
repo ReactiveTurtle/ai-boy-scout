@@ -1,12 +1,19 @@
 using BoyScout.Api.Ai;
 using BoyScout.Api.Setup;
-using BoyScout.Core.Automation;
-using BoyScout.Core.Reports;
-using BoyScout.Core.Storage;
-using BoyScout.Core.Storage.Config;
-using BoyScout.Core.Storage.Firebase;
-using BoyScout.Core.Storage.Migration;
-using BoyScout.Core.Tasks;
+using BoyScout.Application.Automation;
+using BoyScout.Application.Projects;
+using BoyScout.Application.Reports;
+using BoyScout.Application.Tasks;
+using BoyScout.Infrastructure.Automation;
+using BoyScout.Infrastructure;
+using BoyScout.Infrastructure.Reports;
+using BoyScout.Infrastructure.Persistence;
+using BoyScout.Infrastructure.Configuration;
+using BoyScout.Infrastructure.Firebase;
+using BoyScout.Infrastructure.Persistence.Migration;
+using BoyScout.Infrastructure.Tasks;
+using BoyScout.Domain.Reports;
+using BoyScout.Domain.Tasks;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -31,6 +38,7 @@ if (config.LoadStatus().Backend != StorageBackend.Sqlite)
 builder.Services.AddSingleton(config);
 var database = new BoyScoutDatabase(BoyScoutDatabasePath.Resolve());
 database.Migrate();
+builder.Services.AddBoyScoutInfrastructure(database.DatabasePath);
 builder.Services.AddSingleton(database);
 builder.Services.AddSingleton<IReportStore>(_ => new ReportStore(database, config));
 builder.Services.AddSingleton<ITaskStore>(_ => new TaskStore(database, config));
@@ -179,7 +187,7 @@ app.MapPatch("/api/remote-projects/{id:long}/ai-consent", IResult (
     catch (ArgumentOutOfRangeException exception) { return Results.BadRequest(new { error = exception.Message }); }
 });
 app.MapPost("/api/remote-projects/{projectId:long}/firebase-write/preview", async Task<IResult> (
-    BoyScoutConfigService service, BoyScoutDatabase database, IReportStore reports, ITaskStore tasks, AiProcessingControl control,
+    BoyScoutConfigService service, BoyScoutDatabase database, IProjectStore projects, ITaskStore tasks, AiProcessingControl control,
     long projectId, CancellationToken token) =>
 {
     if (projectId <= 0) return Results.BadRequest(new { error = "Project ID must be positive." });
@@ -187,7 +195,7 @@ app.MapPost("/api/remote-projects/{projectId:long}/firebase-write/preview", asyn
         return Results.Conflict(new { error = "Bind the Firebase project to a local path before activation." });
     try
     {
-        return Results.Ok(await BuildFirebaseWriteActivationPreviewAsync(service, database, reports, tasks, control, projectId, token));
+        return Results.Ok(await BuildFirebaseWriteActivationPreviewAsync(service, database, projects, tasks, control, projectId, token));
     }
     catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
     catch (KeyNotFoundException) { return Results.NotFound(); }
@@ -197,7 +205,7 @@ app.MapPost("/api/remote-projects/{projectId:long}/firebase-write/preview", asyn
     { return Results.Problem("Could not complete Firebase activation checks.", statusCode: StatusCodes.Status502BadGateway); }
 });
 app.MapPost("/api/remote-projects/{projectId:long}/firebase-write/confirm", async Task<IResult> (
-    BoyScoutConfigService service, BoyScoutDatabase database, IReportStore reports, ITaskStore tasks, AiProcessingControl control,
+    BoyScoutConfigService service, BoyScoutDatabase database, IProjectStore projects, ITaskStore tasks, AiProcessingControl control,
     long projectId, FirebaseWriteConfirmationRequest request, CancellationToken token) =>
 {
     if (projectId <= 0) return Results.BadRequest(new { error = "Project ID must be positive." });
@@ -205,7 +213,7 @@ app.MapPost("/api/remote-projects/{projectId:long}/firebase-write/confirm", asyn
         return Results.Conflict(new { error = "Bind the Firebase project to a local path before activation." });
     try
     {
-        var preview = await BuildFirebaseWriteActivationPreviewAsync(service, database, reports, tasks, control, projectId, token);
+        var preview = await BuildFirebaseWriteActivationPreviewAsync(service, database, projects, tasks, control, projectId, token);
         if (!preview.ReadyToEnable)
             return Results.Conflict(new { error = preview.BlockingReason ?? "Firebase project is not ready to activate." });
         if (string.IsNullOrWhiteSpace(request.Token) || request.Token != preview.Token)
@@ -479,7 +487,8 @@ app.MapPatch(
             return Results.Conflict(new { error = exception.Message });
         }
     });
-app.MapGet("/api/projects", (IReportStore store) => Results.Ok(store.ListProjects()));
+app.MapGet("/api/projects", async (IProjectStore store, CancellationToken token) =>
+    Results.Ok(await store.ListProjectsAsync(token)));
 app.MapGet("/api/projects/{id:long}/transfer-preview", IResult (BoyScoutDatabase database, long id) =>
 {
     if (id <= 0) return Results.BadRequest(new { error = "Project ID must be positive." });
@@ -502,25 +511,28 @@ app.MapGet("/api/projects/{id:long}/transfer-preview", IResult (BoyScoutDatabase
     catch (InvalidOperationException)
     { return Results.Conflict(new { error = "Local project cannot be safely snapshotted." }); }
 });
-app.MapPost("/api/setup/preview", IResult (RepositoryInstaller installer, IReportStore store, SetupRequest request) =>
+app.MapPost("/api/setup/preview", async Task<IResult> (RepositoryInstaller installer, IProjectStore store, SetupRequest request, CancellationToken token) =>
 {
     try
     {
         var preview = installer.Preview(request.Path);
-        if (!store.ListProjects().Any(project => string.Equals(Path.GetFullPath(project.PrimaryPath), preview.Repository, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)))
+        var projects = await store.ListProjectsAsync(token);
+        if (!projects.Any(project => string.Equals(Path.GetFullPath(project.PrimaryPath), preview.Repository, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)))
             preview = preview with { Files = [.. preview.Files, new SetupFile("Local BoyScout database", "Register repository as a site project on confirmation")] };
         return Results.Ok(preview);
     }
     catch (ArgumentException error) { return Results.BadRequest(new { error = error.Message }); }
     catch (InvalidOperationException error) { return Results.Conflict(new { error = error.Message }); }
 });
-app.MapPost("/api/setup/confirm", IResult (RepositoryInstaller installer, IReportStore store, SetupRequest request) =>
+app.MapPost("/api/setup/confirm", async Task<IResult> (RepositoryInstaller installer, IProjectStore store, SetupRequest request, CancellationToken token) =>
 {
     try
     {
         var preview = installer.Install(request.Path, request.Token);
-        if (!store.ListProjects().Any(project => string.Equals(Path.GetFullPath(project.PrimaryPath), preview.Repository, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)))
-            store.CreateProject(Path.GetFileName(Path.TrimEndingDirectorySeparator(preview.Repository)), preview.Repository);
+        await store.ResolveOrCreateProjectAsync(
+            Path.GetFileName(Path.TrimEndingDirectorySeparator(preview.Repository)),
+            preview.Repository,
+            token);
         return Results.Ok(preview);
     }
     catch (ArgumentException error) { return Results.BadRequest(new { error = error.Message }); }
@@ -528,11 +540,11 @@ app.MapPost("/api/setup/confirm", IResult (RepositoryInstaller installer, IRepor
 });
 app.MapPost(
     "/api/projects",
-    IResult (IReportStore store, CreateProjectRequest request) =>
+    async Task<IResult> (IProjectStore store, CreateProjectRequest request, CancellationToken token) =>
     {
         try
         {
-            return Results.Created("/api/projects", store.CreateProject(request.Name ?? string.Empty, request.Path ?? string.Empty));
+            return Results.Created("/api/projects", await store.CreateProjectAsync(request.Name ?? string.Empty, request.Path ?? string.Empty, token));
         }
         catch (ArgumentException exception)
         {
@@ -545,9 +557,9 @@ app.MapPost(
     });
 app.MapPatch(
     "/api/projects/{id:long}/ai-access",
-    IResult (IReportStore store, AiProcessingControl control, long id, ProjectAiAccessUpdate request) =>
+    async Task<IResult> (IProjectStore store, AiProcessingControl control, long id, ProjectAiAccessUpdate request, CancellationToken token) =>
     {
-        if (!store.SetAiAccess(id, request.Granted))
+        if (!await store.SetAiAccessAsync(id, request.Granted, token))
         {
             return Results.NotFound();
         }
@@ -637,10 +649,13 @@ app.MapPost(
             var status = service.LoadStatus();
             var imported = await repository.ImportNoteAsync(binding.ProjectId, note, status.InstallationId,
                 status.DisplayName, token);
+            var localNote = store.MarkTransferredToFirebase(id, imported.Note.Id)
+                ?? throw new InvalidOperationException("The local note disappeared after its Firebase copy was created.");
             return Results.Ok(new
             {
                 localNoteId = note.Id,
                 firebaseNoteId = imported.Note.Id,
+                firebaseTransferredAt = localNote.FirebaseTransferredAt,
                 alreadyImported = imported.AlreadyImported,
                 note = imported.Note,
             });
@@ -944,12 +959,12 @@ static IResult? ValidateFirebaseProjectBinding(BoyScoutConfigService service, lo
 }
 
 static async Task<FirebaseWriteActivationPreview> BuildFirebaseWriteActivationPreviewAsync(
-    BoyScoutConfigService service, BoyScoutDatabase database, IReportStore reports, ITaskStore tasks,
+    BoyScoutConfigService service, BoyScoutDatabase database, IProjectStore projects, ITaskStore tasks,
     AiProcessingControl control, long remoteProjectId, CancellationToken cancellationToken)
 {
     var binding = service.ResolveByProjectId(remoteProjectId)
         ?? throw new KeyNotFoundException("Firebase project is not bound on this installation.");
-    var project = reports.ListProjects().FirstOrDefault(local =>
+    var project = (await projects.ListProjectsAsync(cancellationToken)).FirstOrDefault(local =>
         string.Equals(ProjectPathNormalizer.Normalize(local.PrimaryPath), binding.LocalPath,
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
         ?? throw new InvalidOperationException("Add the bound directory as a local project before activation.");

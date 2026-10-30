@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\BoyScout.Domain\BoyScout.Domain.csproj" />
+    <ProjectReference Include="..\Common\BoyScout.Common.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,11 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <PackageReference Include="Google.Apis.Auth" Version="1.73.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.10" />
-    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
-  </ItemGroup>
-  <ItemGroup>
-    <InternalsVisibleTo Include="BoyScout.Core.Tests" />
+    <ProjectReference Include="..\BoyScout.Domain\BoyScout.Domain.csproj" />
+    <ProjectReference Include="..\BoyScout.Application\BoyScout.Application.csproj" />
+    <ProjectReference Include="..\Common\BoyScout.Common.csproj" />
+    <ProjectReference Include="..\BoyScout.Infrastructure\BoyScout.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

@@ -1,4 +1,4 @@
-using BoyScout.Core.Automation;
+using BoyScout.Application.Automation;
 
 namespace BoyScout.Api.Ai;
 

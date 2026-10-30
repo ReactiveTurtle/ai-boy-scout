@@ -1,5 +1,5 @@
 using System.Net;
-using BoyScout.Core.Storage.Firebase;
+using BoyScout.Infrastructure.Firebase;
 using Xunit;
 
 namespace BoyScout.Core.Tests;

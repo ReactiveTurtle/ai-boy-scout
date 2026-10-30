@@ -5,10 +5,14 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.10" />
     <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\BoyScout.Core\BoyScout.Core.csproj" />
+    <ProjectReference Include="..\BoyScout.Domain\BoyScout.Domain.csproj" />
+    <ProjectReference Include="..\BoyScout.Application\BoyScout.Application.csproj" />
+    <ProjectReference Include="..\BoyScout.Infrastructure\BoyScout.Infrastructure.csproj" />
+    <ProjectReference Include="..\Common\BoyScout.Common.csproj" />
   </ItemGroup>
 </Project>

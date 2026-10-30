@@ -2,10 +2,14 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using BoyScout.Api.Ai;
-using BoyScout.Core.Reports;
-using BoyScout.Core.Storage;
-using BoyScout.Core.Storage.Firebase;
-using BoyScout.Core.Tasks;
+using BoyScout.Application.Reports;
+using BoyScout.Application.Tasks;
+using BoyScout.Infrastructure.Reports;
+using BoyScout.Infrastructure.Persistence;
+using BoyScout.Infrastructure.Firebase;
+using BoyScout.Infrastructure.Tasks;
+using BoyScout.Domain.Reports;
+using BoyScout.Domain.Tasks;
 using Microsoft.Data.Sqlite;
 using Xunit;
 
@@ -28,7 +32,7 @@ public sealed class OpenCodeProposalGeneratorTests
         Assert.Equal(TimeSpan.FromMinutes(3), call.Timeout);
         Assert.Equal("run", call.Arguments[0]);
         Assert.Equal("--title", call.Arguments[1]);
-        Assert.Equal("BoyScout: verification BSR-000001", call.Arguments[2]);
+        Assert.Equal("BoyScout: BSR-000001 - Finding", call.Arguments[2]);
         Assert.DoesNotContain("delete", call.Arguments);
     }
 
@@ -127,6 +131,19 @@ public sealed class OpenCodeProposalGeneratorTests
 
         Assert.Throws<InvalidOperationException>(
             () => OpenCodeProposalGenerator.ParseResponse(response.ToJsonString()));
+    }
+
+    [Fact]
+    public void ParseResponse_rejects_non_russian_task_descriptions()
+    {
+        var response = JsonNode.Parse(ValidResponse)!.AsObject();
+        response["description"] = "Fix the dependency issue.";
+
+        var error = Assert.Throws<InvalidOperationException>(
+            () => OpenCodeProposalGenerator.ParseResponse(response.ToJsonString()));
+
+        Assert.Contains("description", error.Message, StringComparison.Ordinal);
+        Assert.Contains("Russian", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

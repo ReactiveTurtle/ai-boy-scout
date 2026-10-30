@@ -37,7 +37,11 @@
           </button>
         </nav>
 
-        <div class="sidebar-current-project"><small>Открытый проект</small><strong>{{ selectedProject()?.name ?? 'Все проекты' }}</strong>@if (selectedProject()) { <code>{{ selectedProject()!.primaryPath }}</code> }</div>
+        <div class="sidebar-current-project">
+          <small><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 5.5h6l1.6 1.8h7.4v8.2h-15z"></path><path d="M2.5 5.5V4.2h5.7l1.6 1.3"></path></svg><span>Открытый проект</span></small>
+          <strong [title]="selectedProject()?.name ?? 'Все проекты'">{{ selectedProject()?.name ?? 'Все проекты' }}</strong>
+          @if (selectedProject()) { <code [title]="selectedProject()!.primaryPath">{{ selectedProject()!.primaryPath }}</code> }
+        </div>
 
         <div class="sidebar-ai" [attr.data-state]="selectedProject() && !selectedProject()!.aiAccessGranted ? 'idle' : proposal()?.state ?? 'idle'">
           <div><i></i><span>OpenCode</span></div>
@@ -60,10 +64,24 @@
             <header class="storage-hero project-landing-head">
               <span>BOY SCOUT / PROJECTS</span>
               <h1>Выберите проект</h1>
-              <p>Каждый проект открывается в собственном workspace: заметки, задачи и настройки хранилища относятся только к нему.</p>
+              <div class="project-info-alert" role="note">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8"></circle><path d="M10 9v5m0-8h.01"></path></svg>
+                <p><strong>Рабочие пространства, обнаруженные через MCP.</strong> Проекты добавляются автоматически при работе с репозиториями. Здесь также можно подключить существующий каталог вручную.</p>
+              </div>
               <div class="project-landing-tools">
                 <label class="project-search"><span>⌕</span><input type="search" placeholder="Найти проект по имени или пути" [value]="projectSearchText()" (input)="updateProjectSearch($event)" /></label>
-                <button type="button" (click)="projectFormOpen.set(!projectFormOpen())">{{ projectFormOpen() ? 'Отмена' : '+ Новый проект' }}</button>
+                <div class="project-scopes" role="group" aria-label="Фильтр проектов">
+                  <button type="button" [class.active]="projectScope() === 'all'" (click)="selectProjectScope('all')">Все <b>{{ projectScopeCount('all') }}</b></button>
+                  <button type="button" [class.active]="projectScope() === 'recent'" (click)="selectProjectScope('recent')">Недавние</button>
+                  <button type="button" [class.active]="projectScope() === 'pinned'" (click)="selectProjectScope('pinned')">Закреплённые</button>
+                  <button type="button" [class.active]="projectScope() === 'hidden'" (click)="selectProjectScope('hidden')">Скрытые <b>{{ projectScopeCount('hidden') }}</b></button>
+                </div>
+                <label class="project-sort">Сортировка<select [value]="projectSort()" (change)="projectSort.set($any($event.target).value)"><option value="activity">По активности</option><option value="name">По названию</option></select></label>
+                <div class="project-view-switch" role="group" aria-label="Вид списка проектов">
+                  <button type="button" aria-label="Список" [attr.aria-pressed]="projectView() === 'list'" [class.active]="projectView() === 'list'" (click)="projectView.set('list')"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 5h10M7 10h10M7 15h10M3 5h.01M3 10h.01M3 15h.01"></path></svg></button>
+                  <button type="button" aria-label="Сетка" [attr.aria-pressed]="projectView() === 'grid'" [class.active]="projectView() === 'grid'" (click)="projectView.set('grid')"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5" height="5" rx="1"></rect><rect x="12" y="3" width="5" height="5" rx="1"></rect><rect x="3" y="12" width="5" height="5" rx="1"></rect><rect x="12" y="12" width="5" height="5" rx="1"></rect></svg></button>
+                </div>
+                <button class="new-project-button" type="button" (click)="projectFormOpen.set(!projectFormOpen())">{{ projectFormOpen() ? 'Отмена' : '+ Новый проект' }}</button>
               </div>
               @if (projectFormOpen()) {
                 <form class="project-form project-landing-form storage-card" (submit)="$event.preventDefault(); createProject()">
@@ -73,27 +91,38 @@
                 </form>
               }
             </header>
-            <div class="project-landing-grid">
-              @if (visibleProjects().length === 0) { <div class="empty-state project-landing-empty"><h2>Проектов пока нет</h2><p>Создайте проект из существующего каталога, чтобы начать собирать заметки.</p></div> }
-              @for (project of visibleProjects(); track project.id) {
-                <button class="storage-card project-card" type="button" (click)="enterProject(project.id)">
-                  <span class="project-card-mark" [class.access-granted]="project.aiAccessGranted">{{ project.aiAccessGranted ? '●' : '□' }}</span>
-                  <strong>{{ project.name }}</strong>
-                  <code>{{ project.primaryPath }}</code>
-                  <span>{{ project.reportCount }} заметок · {{ project.openCount }} открыто</span>
-                  <small>{{ project.aiAccessGranted ? 'AI-доступ разрешён' : 'AI-доступ не разрешён' }}</small>
-                  <b>Войти в проект →</b>
-                </button>
-              }
-              @if (!projectSearchText()) {
-                <button class="storage-card project-card all-projects-card" type="button" (click)="enterProject(null)">
-                  <span class="project-card-mark">⌂</span>
-                  <strong>Все проекты</strong>
-                  <span>{{ allNoteCount() }} заметок во всех локальных проектах</span>
-                  <b>Открыть общий workspace →</b>
-                </button>
+            <div class="project-list" [class.grid-view]="projectView() === 'grid'">
+              @if (projectGroups().length === 0) { <div class="empty-state project-landing-empty"><h2>{{ projectScope() === 'hidden' ? 'Скрытых проектов нет' : 'Проекты не найдены' }}</h2><p>{{ projectSearchText() ? 'Измените поисковый запрос.' : 'Добавьте существующий каталог или начните работу с репозиторием через MCP.' }}</p></div> }
+              @for (group of projectGroups(); track group.id) {
+                <section class="project-group" [attr.data-group]="group.id">
+                  <div class="project-group-heading"><h2>
+                    @if (group.icon === 'star') { <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m10 2.5 2.2 4.45 4.9.72-3.55 3.46.84 4.88L10 13.7l-4.39 2.31.84-4.88L2.9 7.67l4.9-.72L10 2.5Z"></path></svg> }
+                    @else if (group.icon === 'clock') { <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.25"></circle><path d="M10 5.5v4.8l3.1 1.8"></path></svg> }
+                    @else if (group.icon === 'eye-off') { <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 3 17 17M8.6 5.2A7.6 7.6 0 0 1 10 5c4.4 0 7.2 5 7.2 5a12 12 0 0 1-2.1 2.6M5.2 6.1C3.7 7.3 2.8 10 2.8 10s2.8 5 7.2 5c.8 0 1.5-.2 2.1-.4"></path></svg> }
+                    @else { <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 5.5h6l1.6 1.8h7.4v8.2h-15z"></path><path d="M2.5 5.5V4.2h5.7l1.6 1.3"></path></svg> }
+                    {{ group.label }} <span>{{ group.projects.length }}</span>
+                  </h2>@if (group.id !== 'hidden') { <div class="project-columns"><span>Заметки</span><span>Открыто</span><span>Последняя активность</span><span>AI-доступ</span></div> }</div>
+                  <div class="project-rows">
+                    @for (project of group.projects; track project.id) {
+                      <article class="project-row">
+                        <svg class="project-folder-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h5l2 2h8A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"></path></svg>
+                        <div class="project-row-identity"><div class="project-row-title"><strong [title]="project.name">{{ project.name }}</strong>@if (isProjectPinned(project.id)) { <svg class="pinned-star" viewBox="0 0 20 20" aria-label="Закреплённый проект"><path d="m10 2.5 2.2 4.45 4.9.72-3.55 3.46.84 4.88L10 13.7l-4.39 2.31.84-4.88L2.9 7.67l4.9-.72L10 2.5Z"></path></svg> }@if (isTemporaryProject(project)) { <span class="temporary-badge">Временный</span> }</div><code class="project-row-path" [title]="project.primaryPath">{{ project.primaryPath }}</code></div>
+                        <span class="project-stat"><b>{{ project.reportCount }}</b><small>заметок</small></span><span class="project-stat"><b>{{ project.openCount }}</b><small>открыто</small></span>
+                        <time class="project-activity" [attr.title]="project.lastReportAt || 'Нет активности'">{{ project.lastReportAt ? (project.lastReportAt | date:'d MMM, HH:mm') : 'Нет активности' }}</time>
+                        <button class="project-ai-toggle" type="button" [class.granted]="project.aiAccessGranted" [disabled]="actionPending()" [attr.aria-pressed]="project.aiAccessGranted" [attr.aria-label]="(project.aiAccessGranted ? 'Отозвать' : 'Разрешить') + ' AI-доступ для ' + project.name" [title]="project.aiAccessGranted ? 'Нажмите, чтобы отозвать AI-доступ' : 'Нажмите, чтобы разрешить AI-доступ'" (click)="setProjectAiAccess(project, !project.aiAccessGranted)">
+                          @if (project.aiAccessGranted) { <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4 10.2 3.8 3.7L16 5.8"></path></svg><span>Разрешён</span> } @else { <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="8.5" width="12" height="9" rx="2"></rect><path d="M6.5 8.5V6a3.5 3.5 0 0 1 7 0v2.5M10 12v2"></path></svg><span>Нет доступа</span> }
+                        </button>
+                        <button class="project-open-button" type="button" (click)="enterProject(project.id)">Открыть <span aria-hidden="true">→</span></button>
+                        <div class="project-menu-wrap"><button class="project-menu-button" type="button" aria-label="Действия с проектом" [attr.aria-expanded]="projectMenuId() === project.id" (click)="$event.stopPropagation(); toggleProjectMenu(project.id)"><span></span><span></span><span></span></button>
+                          @if (projectMenuId() === project.id) { <div class="project-menu" role="menu"><button type="button" role="menuitem" (click)="enterProject(project.id)"><span>↗</span>Открыть workspace</button><button type="button" role="menuitem" (click)="toggleProjectPinned(project.id)"><span>☆</span>{{ isProjectPinned(project.id) ? 'Открепить' : 'Закрепить' }}</button><button type="button" role="menuitem" (click)="copyProjectPath(project)"><span>▢</span>Скопировать путь</button><button type="button" role="menuitem" (click)="toggleProjectHidden(project.id)"><span>⊘</span>{{ group.id === 'hidden' ? 'Вернуть в список' : 'Скрыть из списка' }}</button></div> }
+                        </div>
+                      </article>
+                    }
+                  </div>
+                </section>
               }
             </div>
+            <button class="all-workspaces-button" type="button" (click)="enterProject(null)"><span>Открыть общий workspace</span><small>{{ allNoteCount() }} заметок во всех проектах</small><b aria-hidden="true">→</b></button>
           </section>
         } @else if (workspace() === 'storage') {
           <div class="storage-page">
@@ -111,9 +140,9 @@
                   </form>
                 </section>
                 <section class="storage-card">
-                  <span class="storage-step">02 / Общая база</span>
-                  <h2>Firebase Realtime Database</h2>
-                  <p>Укажите данные сервисного аккаунта Firebase. BoyScout сохранит секретный ключ на этом компьютере и проверит доступ к базе.</p>
+                  <span class="storage-step">02 / Подключение</span>
+                  <h2>Подключить Firebase</h2>
+                  <p>Сначала укажите адрес Realtime Database, затем данные сервисного аккаунта из JSON-файла Firebase Admin SDK. Секретный ключ будет защищённо сохранён на этом компьютере.</p>
                   <div class="firebase-connection-state" [attr.data-state]="firebaseConnectionState()">
                     <i></i>
                     @if (firebaseConnectionState() === 'checking') { <span>Проверяем доступ к Firebase…</span> }
@@ -122,11 +151,22 @@
                     @else if (storageStatus()?.hasFirebaseConnection) { <span>Учётные данные сохранены. Введите их снова, чтобы проверить подключение.</span> }
                     @else { <span>Firebase ещё не подключён.</span> }
                   </div>
-                  <form (submit)="$event.preventDefault(); saveFirebaseConnection()">
-                    <label>Database URL <input type="url" required autocomplete="off" [value]="firebaseUrl()" (input)="firebaseUrl.set($any($event.target).value)" placeholder="https://example-default-rtdb.firebaseio.com" /></label>
-                    <label>Project ID <input type="text" required autocomplete="off" [value]="firebaseProjectId()" (input)="firebaseProjectId.set($any($event.target).value)" /></label>
-                    <label>Client email <input type="email" required autocomplete="off" [value]="firebaseClientEmail()" (input)="firebaseClientEmail.set($any($event.target).value)" /></label>
-                    <label>Private key <textarea required autocomplete="new-password" [value]="firebasePrivateKey()" (input)="firebasePrivateKey.set($any($event.target).value)" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></label>
+                  <form class="firebase-connection-form" (submit)="$event.preventDefault(); saveFirebaseConnection()">
+                    <fieldset class="firebase-field-group">
+                      <legend>1. Адрес базы данных</legend>
+                      <label>Realtime Database URL <input type="url" required autocomplete="url" [value]="firebaseUrl()" (input)="firebaseUrl.set($any($event.target).value)" placeholder="https://your-project-default-rtdb.firebaseio.com" /></label>
+                      <small>Firebase Console → Build → Realtime Database. Скопируйте URL в верхней части страницы.</small>
+                    </fieldset>
+                    <fieldset class="firebase-field-group">
+                      <legend>2. Сервисный аккаунт</legend>
+                      <p>Firebase Console → Project settings → Service accounts → Generate new private key. Откройте скачанный JSON и скопируйте значения ниже.</p>
+                      <div class="firebase-credential-fields">
+                        <label>Project ID <input type="text" required autocomplete="off" [value]="firebaseProjectId()" (input)="firebaseProjectId.set($any($event.target).value)" placeholder="project-id из JSON" /></label>
+                        <label>Client email <input type="email" required autocomplete="email" [value]="firebaseClientEmail()" (input)="firebaseClientEmail.set($any($event.target).value)" placeholder="client_email из JSON" /></label>
+                      </div>
+                      <label>Private key <textarea required autocomplete="new-password" [value]="firebasePrivateKey()" (input)="firebasePrivateKey.set($any($event.target).value)" placeholder="Вставьте значение private_key целиком"></textarea></label>
+                      <small>Вставьте значение вместе с BEGIN/END PRIVATE KEY. Не публикуйте его и не добавляйте в репозиторий.</small>
+                    </fieldset>
                     <button type="submit" [disabled]="storagePending() || !firebaseUrl().trim() || !firebaseProjectId().trim() || !firebaseClientEmail().trim() || !firebasePrivateKey().trim()">{{ storagePending() ? 'Проверяем подключение…' : 'Сохранить и проверить доступ' }}</button>
                   </form>
                 </section>
@@ -181,8 +221,10 @@
         </section>
 
         @if (projectSettingsOpen() && selectedProject(); as project) {
-          <section class="setup-panel project-settings" aria-label="Настройки проекта">
-            <div class="setup-heading"><h2>{{ project.name }}</h2><button type="button" (click)="projectSettingsOpen.set(false)">Закрыть</button></div>
+          <div class="project-settings-backdrop" role="presentation" (click)="projectSettingsOpen.set(false)" (keydown.escape)="projectSettingsOpen.set(false)">
+          <section class="setup-panel project-settings" role="dialog" aria-modal="true" aria-labelledby="project-settings-title" tabindex="-1" (click)="$event.stopPropagation()">
+            <div class="setup-heading"><h2 id="project-settings-title">Настройки проекта</h2><button type="button" autofocus aria-label="Закрыть настройки проекта" (click)="projectSettingsOpen.set(false)">Закрыть</button></div>
+            <p class="project-settings-name">{{ project.name }}</p>
             <p>Путь на этом компьютере: <code>{{ project.primaryPath }}</code></p>
             <div class="project-access" [class.granted]="project.aiAccessGranted">
               <span><i></i>OpenCode: {{ project.aiAccessGranted ? 'чтение разрешено' : 'нет доступа' }}</span>
@@ -211,14 +253,14 @@
                 <p>Контрольная сумма: <code>{{ preview.sha256 }}</code></p>
               }
             </div>
-            <div class="setup-preview">
+            <div class="setup-preview firebase-projects-panel">
               <h3>Общие проекты Firebase</h3>
               @if (storageStatus()?.hasFirebaseConnection) {
-                <p>Привязка пути и разрешение AI действуют только на этом компьютере. Записи пока остаются в SQLite.</p>
-                <button type="button" [disabled]="storagePending()" (click)="loadRemoteProjects()">Обновить проекты</button>
-                <form (submit)="$event.preventDefault(); createRemoteProject()">
-                  <label>Новый общий проект <input type="text" required [value]="remoteProjectName()" (input)="remoteProjectName.set($any($event.target).value)" /></label>
-                  <button type="submit" [disabled]="storagePending() || !remoteProjectName().trim()">Создать в Firebase</button>
+                <p>Создайте или выберите общий Firebase-проект, затем привяжите к нему локальный каталог. Привязка действует только на этом компьютере; старые записи остаются в SQLite.</p>
+                <button type="button" [disabled]="storagePending()" (click)="loadRemoteProjects()">Обновить список</button>
+                <form class="firebase-project-create" (submit)="$event.preventDefault(); createRemoteProject()">
+                  <label>Создать общий проект <input type="text" required [value]="remoteProjectName()" (input)="remoteProjectName.set($any($event.target).value)" placeholder="Название проекта" /></label>
+                  <button type="submit" [disabled]="storagePending() || !remoteProjectName().trim()">Создать проект</button>
                 </form>
                 @for (remote of remoteProjects(); track remote.id) {
                   <section>
@@ -405,6 +447,7 @@
               }
             </div>
           </section>
+          </div>
         }
 
         <section class="toolbar">
@@ -428,7 +471,7 @@
                     <span class="record-main">
                       <span class="record-title"><i class="status-dot" [attr.data-state]="reviewState(note)"></i><strong>{{ note.title }}</strong></span>
                       <small>{{ note.observation }}</small>
-                       <span class="record-meta"><em>{{ projectLabel(note) }}</em>@if (note.sourceName) { <span>{{ note.sourceName }}</span> }<span class="review-label">{{ noteReviewLabel(note) }}</span><span>{{ note.id }}</span><time>{{ formatDate(note.createdAt) }}</time></span>
+                        <span class="record-meta"><em>{{ projectLabel(note) }}</em>@if (note.sourceName) { <span>{{ note.sourceName }}</span> }<span class="review-label">{{ noteReviewLabel(note) }}</span>@if (note.firebaseNoteId) { <span class="firebase-note-badge">В Firebase</span> }<span>{{ note.id }}</span><time>{{ formatDate(note.createdAt) }}</time></span>
                     </span>
                     <span class="row-menu">⋮</span>
                   </button>
@@ -451,14 +494,14 @@
                   @if (storageStatus()?.hasFirebaseConnection) {
                     @if (firebaseBindingForNote(note)) {
                       <button type="button" [disabled]="storagePending()" (click)="transferNoteToFirebase(note)">
-                        {{ transferredNoteIds()[note.id] ? 'Копия в Firebase' : 'Скопировать заметку в Firebase' }}
+                        {{ note.firebaseNoteId ? 'Копия в Firebase' : 'Скопировать заметку в Firebase' }}
                       </button>
                     } @else if (note.projectId !== null) {
                       <button type="button" (click)="openNoteProjectSettings(note)">Сначала привязать проект Firebase</button>
                     }
                   }
                 </div>
-                @if (transferredNoteIds()[note.id]) { <p class="firebase-transfer-note">Firebase ID: <code>{{ transferredNoteIds()[note.id] }}</code>. Локальная заметка не удалена; proposal и задача не копируются.</p> }
+                @if (note.firebaseNoteId) { <p class="firebase-transfer-note"><strong>Копия в Firebase</strong> · ID <code>{{ note.firebaseNoteId }}</code>. Локальная заметка не удалена; proposal и задача не копируются.</p> }
                 <div class="note-narrative">
                   <section class="observation-card"><h3>Наблюдение</h3><p>{{ note.observation }}</p></section>
                   @if (note.impact) { <section class="impact-card"><h3>Почему важно</h3><p>{{ note.impact }}</p></section> }

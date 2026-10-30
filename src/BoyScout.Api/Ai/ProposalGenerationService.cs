@@ -1,8 +1,10 @@
-using BoyScout.Core.Tasks;
-using BoyScout.Core.Reports;
-using BoyScout.Core.Storage;
-using BoyScout.Core.Storage.Config;
-using BoyScout.Core.Storage.Firebase;
+using BoyScout.Application.Reports;
+using BoyScout.Application.Tasks;
+using BoyScout.Infrastructure.Configuration;
+using BoyScout.Infrastructure.Firebase;
+using BoyScout.Infrastructure.Persistence;
+using BoyScout.Domain.Reports;
+using BoyScout.Domain.Tasks;
 using System.Globalization;
 using System.Runtime.ExceptionServices;
 using System.Text.Json.Nodes;

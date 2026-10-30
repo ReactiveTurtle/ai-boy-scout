@@ -1,8 +1,8 @@
 using System.Net;
 using System.Text.Json.Nodes;
-using BoyScout.Core.Storage.Config;
-using BoyScout.Core.Storage.Firebase;
-using BoyScout.Core.Tasks;
+using BoyScout.Infrastructure.Configuration;
+using BoyScout.Infrastructure.Firebase;
+using BoyScout.Domain.Tasks;
 using Xunit;
 
 namespace BoyScout.Core.Tests;

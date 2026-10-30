@@ -1,7 +1,8 @@
 using System.Net;
 using System.Text.Json;
-using BoyScout.Core.Reports;
-using BoyScout.Core.Storage.Firebase;
+using BoyScout.Application.Reports;
+using BoyScout.Infrastructure.Firebase;
+using BoyScout.Domain.Reports;
 using Xunit;
 
 namespace BoyScout.Core.Tests;
@@ -96,6 +97,23 @@ public sealed class FirebaseReportRepositoryTests
         Assert.Equal(imported.Note, duplicate.Note);
         Assert.Equal(writes, server.ProjectWrites);
         Assert.Equal(imported.Note, await repository.GetNoteAsync(imported.Note.Id, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Import_of_accepted_note_preserves_its_status()
+    {
+        using var server = new Server();
+        var repository = Repository(server);
+        var project = await repository.CreateProjectAsync("Shared", TestContext.Current.CancellationToken);
+        var source = new BoyScoutReport("BSR-000042", "/repo", "Original title", null, "Observed",
+            null, null, null, ReportStatuses.Accepted, "2024-03-04T05:06:07.000Z",
+            "2024-03-04T05:06:07.000Z", ProjectId: 7);
+
+        var imported = await repository.ImportNoteAsync(project.Id, source, Installation, "current-machine",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ReportStatuses.Accepted, imported.Note.Status);
+        Assert.Equal("BSR-000042", imported.Note.OriginNoteId);
     }
 
     [Fact]

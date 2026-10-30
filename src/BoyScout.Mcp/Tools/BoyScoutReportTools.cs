@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json;
-using BoyScout.Core.Reports;
+using BoyScout.Application.Reports;
+using BoyScout.Domain.Reports;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
 
@@ -109,9 +110,9 @@ public sealed class BoyScoutReportTools
     {
         try
         {
-            return Serialize(
-                store.UpdateStatus(id, ToWireValue(status))
-                    ?? throw new McpException($"Boy Scout report {id} was not found."));
+            var report = store.UpdateStatus(id, ToWireValue(status))
+                ?? throw new McpException($"Boy Scout report {id} was not found.");
+            return Serialize(report);
         }
         catch (ArgumentException exception)
         {
