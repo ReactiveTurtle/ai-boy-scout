@@ -37,6 +37,13 @@ state: accepted
 - The user reset the implementation after deleting the previous TodoGraph product. Preserve the accepted DDD/condition/waiting principles where they still apply, but the new lifecycle starts with a `ProjectTask` directly rather than a Candidate.
 - The new snapshot-at-start choice supersedes the older accepted live-definition/no-snapshot rule.
 
+## Follow-up decisions and open rules — 2026-10-30
+
+- A Process definition must contain at least one Stage.
+- Branches are predicate-based; the predicate operands and evaluator contract are not yet specified.
+- A waiting stage presents a prompt, accepts free-text user input, and resumes that same stage.
+- A Process can be connected to another Process. Whether this is a completion chain, a stage-level edge, or a catalog-only relation—and how it affects a running snapshot—remains to be specified in ITR-016.
+
 ## Current boundary
 
 Keep `Project` as the aggregate root with GUID identity, Name, and FullPath. Do not add Candidate intake, repository/worktree execution, MR/PR state, or BoyScout integration to this workflow without a separate request.

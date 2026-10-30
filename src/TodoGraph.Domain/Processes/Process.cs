@@ -7,12 +7,16 @@ public sealed class Process : AggregateRoot
 {
     private readonly List<ProcessStage> stages = [];
 
-    private Process(string name) => Name = Required(name, nameof(name));
+    private Process(string name, string initialStageInstructions)
+    {
+        Name = Required(name, nameof(name));
+        stages.Add(new ProcessStage(initialStageInstructions));
+    }
 
     public string Name { get; private set; }
     public IReadOnlyList<ProcessStage> Stages => stages.AsReadOnly();
 
-    public static Process Create(string name) => new(name);
+    public static Process Create(string name, string initialStageInstructions) => new(name, initialStageInstructions);
 
     public void Rename(string name) => Name = Required(name, nameof(name));
 
@@ -26,7 +30,14 @@ public sealed class Process : AggregateRoot
     public void UpdateStageInstructions(Guid stageId, string instructions) =>
         GetStage(stageId).UpdateInstructions(instructions);
 
-    public void RemoveStage(Guid stageId) => stages.Remove(GetStage(stageId));
+    public void RemoveStage(Guid stageId)
+    {
+        var stage = GetStage(stageId);
+        if (stages.Count == 1)
+            throw new InvalidOperationException("A Process must contain at least one stage.");
+
+        stages.Remove(stage);
+    }
 
     public void ReorderStages(IReadOnlyList<Guid> orderedStageIds)
     {
