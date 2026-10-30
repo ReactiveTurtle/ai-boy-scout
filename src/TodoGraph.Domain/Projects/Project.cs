@@ -5,6 +5,8 @@ namespace TodoGraph.Domain.Projects;
 /// <summary>A workspace aggregate root whose identity is independent of its display name.</summary>
 public sealed class Project : AggregateRoot
 {
+    private readonly List<ProjectTask> tasks = [];
+
     private Project(string name, string fullPath)
     {
         Name = NormalizeName(name);
@@ -13,8 +15,16 @@ public sealed class Project : AggregateRoot
 
     public string Name { get; private set; } = string.Empty;
     public string FullPath { get; private set; } = string.Empty;
+    public IReadOnlyCollection<ProjectTask> Tasks => tasks.AsReadOnly();
 
     public static Project Create(string name, string fullPath) => new(name, fullPath);
+
+    public ProjectTask CreateTask(string description)
+    {
+        var task = new ProjectTask(description);
+        tasks.Add(task);
+        return task;
+    }
 
     private static string NormalizeName(string? name)
     {

@@ -34,6 +34,36 @@ namespace TodoGraph.Infrastructure.Persistence.Migrations
 
                     b.ToTable("projects", (string)null);
                 });
+
+            modelBuilder.Entity("TodoGraph.Domain.Projects.Project", b =>
+                {
+                    b.OwnsMany("TodoGraph.Domain.Projects.ProjectTask", "Tasks", b1 =>
+                        {
+                            b1.Property<Guid>("Id")
+                                .HasColumnType("TEXT");
+
+                            b1.Property<string>("Description")
+                                .IsRequired()
+                                .HasColumnType("TEXT");
+
+                            b1.Property<Guid>("ProjectId")
+                                .HasColumnType("TEXT");
+
+                            b1.Property<string>("Title")
+                                .HasColumnType("TEXT");
+
+                            b1.HasKey("Id");
+
+                            b1.HasIndex("ProjectId");
+
+                            b1.ToTable("project_tasks", (string)null);
+
+                            b1.WithOwner()
+                                .HasForeignKey("ProjectId");
+                        });
+
+                    b.Navigation("Tasks");
+                });
 #pragma warning restore 612, 618
         }
     }

@@ -9,7 +9,9 @@ public static class DependencyInjection
     public static IServiceCollection AddTodoGraphApplication(this IServiceCollection services)
     {
         services.AddScoped<CreateProjectCommandHandler>();
+        services.AddScoped<CreateProjectTaskCommandHandler>();
         services.AddScoped<ListProjectsQueryHandler>();
+        services.AddScoped<ListProjectTasksQueryHandler>();
         return services;
     }
 }

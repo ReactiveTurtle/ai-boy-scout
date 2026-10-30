@@ -49,6 +49,38 @@ public static class ProjectEndpoints
             return Results.Created($"/api/projects/{project.Id}", project);
         });
 
+        endpoints.MapGet("/api/projects/{projectId:guid}/tasks", async Task<IResult> (
+            Guid projectId,
+            ListProjectTasksQueryHandler handler,
+            CancellationToken cancellationToken) =>
+        {
+            var tasks = await handler.Handle(new ListProjectTasksQuery(projectId), cancellationToken);
+            return tasks is null ? Results.NotFound() : Results.Ok(tasks);
+        });
+
+        endpoints.MapPost("/api/projects/{projectId:guid}/tasks", async Task<IResult> (
+            Guid projectId,
+            CreateProjectTaskRequest request,
+            CreateProjectTaskCommandHandler handler,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var task = await handler.Handle(
+                    new CreateProjectTaskCommand(projectId, request.Description),
+                    cancellationToken);
+                return task is null
+                    ? Results.NotFound()
+                    : Results.Created($"/api/projects/{projectId}/tasks/{task.Id}", task);
+            }
+            catch (ArgumentException exception)
+            {
+                return Results.BadRequest(new { error = exception.Message });
+            }
+        });
+
         return endpoints;
     }
 }
+
+public sealed record CreateProjectTaskRequest(string Description);

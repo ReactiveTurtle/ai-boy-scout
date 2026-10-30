@@ -13,5 +13,15 @@ internal sealed class ProjectConfiguration : IEntityTypeConfiguration<Project>
         builder.Property(project => project.Id).ValueGeneratedNever();
         builder.Property(project => project.Name).IsRequired();
         builder.Property(project => project.FullPath).IsRequired();
+        builder.OwnsMany(project => project.Tasks, tasks =>
+        {
+            tasks.ToTable("project_tasks");
+            tasks.WithOwner().HasForeignKey("ProjectId");
+            tasks.HasKey(task => task.Id);
+            tasks.Property(task => task.Id).ValueGeneratedNever();
+            tasks.Property(task => task.Title);
+            tasks.Property(task => task.Description).IsRequired();
+        });
+        builder.Navigation(project => project.Tasks).HasField("tasks").UsePropertyAccessMode(PropertyAccessMode.Field);
     }
 }

@@ -35,6 +35,8 @@ The site opens to the Projects chooser. Enter a project to work with its own Not
 
 TodoGraph runs as a separate ASP.NET Core service on `http://127.0.0.1:5207`; start it with `npm run start:todo-graph`. Its layers are `TodoGraph.Domain`, `TodoGraph.Application` (CQRS), `TodoGraph.Infrastructure` (EF Core SQLite), and `TodoGraph.Api` (minimal endpoints and SignalR). The initial project API supports `GET`/`POST /api/projects`; project creation broadcasts `ProjectCreated` on `/hubs/projects`. Set `TODO_GRAPH_DB` to override the new database path; the default is `%LOCALAPPDATA%\todo-graph-v2\todo-graph.db`.
 
+On Windows, run `npm install --prefix src/TodoGraph.WebApp` once, then `npm run install:todo-graph-background` to register and start API/WebApp tasks at user logon. The Angular dev server is at `http://127.0.0.1:4200`; the API is at `http://127.0.0.1:5207`. The new TodoGraph database and captured service logs (`logs\api.log`, `logs\webapp.log`) live under `%LOCALAPPDATA%\todo-graph-v2`. Remove the startup tasks with `npm run remove:todo-graph-background`. The WebApp is currently the standalone Angular starter and is not yet connected to API features.
+
 ### Install MCP in a project repository
 
 1. Publish the MCP from the Boy Scout checkout with `npm run publish:mcp`.
