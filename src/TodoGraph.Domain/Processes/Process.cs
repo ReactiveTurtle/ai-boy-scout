@@ -56,6 +56,19 @@ public sealed class Process : AggregateRoot
         blocks.AddRange(reorderedBlocks);
     }
 
+    public ProcessSnapshot CaptureSnapshot()
+    {
+        var stageSnapshotsByHash = new Dictionary<string, ProcessStageSnapshot>(StringComparer.Ordinal);
+        var blockSnapshots = blocks
+            .Select(block => block.CaptureSnapshot(stageSnapshotsByHash))
+            .ToArray();
+        var stageSnapshots = stageSnapshotsByHash.Values
+            .OrderBy(snapshot => snapshot.Hash, StringComparer.Ordinal)
+            .ToArray();
+
+        return new ProcessSnapshot(Id, Name, blockSnapshots, stageSnapshots);
+    }
+
     private ProcessBlock GetBlock(Guid blockId) =>
         blocks.SingleOrDefault(block => block.Id == blockId)
         ?? throw new ArgumentException("The block does not belong to this Process.", nameof(blockId));

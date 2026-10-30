@@ -13,6 +13,8 @@ public sealed class ProcessStage : BaseEntity
 
     internal void SetBackwardLink(ProcessStageBackwardLink? backwardLink) => BackwardLink = backwardLink;
 
+    internal ProcessStageSnapshot CaptureSnapshot() => ProcessStageSnapshot.Create(this);
+
     private static string Required(string? instructions)
     {
         var normalized = instructions?.Trim();

@@ -80,6 +80,28 @@ public sealed class ProcessBlock : BaseEntity
 
     public void RemoveBackwardLink(Guid sourceStageId) => GetStage(sourceStageId).SetBackwardLink(null);
 
+    internal ProcessBlockSnapshot CaptureSnapshot(IDictionary<string, ProcessStageSnapshot> stageSnapshotsByHash)
+    {
+        var stageReferences = new List<ProcessStageSnapshotReference>(stages.Count);
+        foreach (var stage in stages)
+        {
+            var snapshot = stage.CaptureSnapshot();
+            if (stageSnapshotsByHash.TryGetValue(snapshot.Hash, out var existingSnapshot))
+            {
+                if (!existingSnapshot.HasSameContent(snapshot))
+                    throw new InvalidOperationException("A stage snapshot hash collision was detected.");
+            }
+            else
+            {
+                stageSnapshotsByHash.Add(snapshot.Hash, snapshot);
+            }
+
+            stageReferences.Add(new ProcessStageSnapshotReference(stage.Id, snapshot.Hash));
+        }
+
+        return new ProcessBlockSnapshot(Id, stageReferences);
+    }
+
     private ProcessStage GetStage(Guid stageId) =>
         stages.SingleOrDefault(stage => stage.Id == stageId)
         ?? throw new ArgumentException("The stage does not belong to this ProcessBlock.", nameof(stageId));
