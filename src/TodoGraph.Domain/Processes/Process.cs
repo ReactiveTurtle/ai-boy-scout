@@ -7,13 +7,19 @@ public sealed class Process : AggregateRoot
 {
     private readonly List<ProcessBlock> blocks = [];
 
+    private Process()
+    {
+    }
+
     private Process(string name, string initialStageInstructions)
     {
         Name = Required(name, nameof(name));
-        blocks.Add(new ProcessBlock(initialStageInstructions));
+        var initialBlock = new ProcessBlock(initialStageInstructions);
+        initialBlock.SetPosition(0);
+        blocks.Add(initialBlock);
     }
 
-    public string Name { get; private set; }
+    public string Name { get; private set; } = string.Empty;
     public IReadOnlyList<ProcessBlock> Blocks => blocks.AsReadOnly();
 
     public static Process Create(string name, string initialStageInstructions) => new(name, initialStageInstructions);
@@ -23,6 +29,7 @@ public sealed class Process : AggregateRoot
     public ProcessBlock AddBlock(string initialStageInstructions)
     {
         var block = new ProcessBlock(initialStageInstructions);
+        block.SetPosition(blocks.Count);
         blocks.Add(block);
         return block;
     }
@@ -34,6 +41,7 @@ public sealed class Process : AggregateRoot
             throw new InvalidOperationException("A Process must contain at least one block.");
 
         blocks.Remove(block);
+        SetBlockPositions();
     }
 
     public void ReorderBlocks(IReadOnlyList<Guid> orderedBlockIds)
@@ -54,6 +62,7 @@ public sealed class Process : AggregateRoot
         var reorderedBlocks = orderedBlockIds.Select(blockId => blocksById[blockId]).ToArray();
         blocks.Clear();
         blocks.AddRange(reorderedBlocks);
+        SetBlockPositions();
     }
 
     public ProcessSnapshot CaptureSnapshot()
@@ -72,6 +81,12 @@ public sealed class Process : AggregateRoot
     private ProcessBlock GetBlock(Guid blockId) =>
         blocks.SingleOrDefault(block => block.Id == blockId)
         ?? throw new ArgumentException("The block does not belong to this Process.", nameof(blockId));
+
+    private void SetBlockPositions()
+    {
+        for (var index = 0; index < blocks.Count; index++)
+            blocks[index].SetPosition(index);
+    }
 
     private static string Required(string? value, string parameterName)
     {

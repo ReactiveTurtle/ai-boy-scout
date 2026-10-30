@@ -7,13 +7,24 @@ public sealed class ProcessBlock : BaseEntity
 {
     private readonly List<ProcessStage> stages = [];
 
-    internal ProcessBlock(string initialStageInstructions) => stages.Add(new ProcessStage(initialStageInstructions));
+    private ProcessBlock()
+    {
+    }
 
+    internal ProcessBlock(string initialStageInstructions)
+    {
+        var initialStage = new ProcessStage(initialStageInstructions);
+        initialStage.SetPosition(0);
+        stages.Add(initialStage);
+    }
+
+    public int Position { get; internal set; }
     public IReadOnlyList<ProcessStage> Stages => stages.AsReadOnly();
 
     public ProcessStage AddStage(string instructions)
     {
         var stage = new ProcessStage(instructions);
+        stage.SetPosition(stages.Count);
         stages.Add(stage);
         return stage;
     }
@@ -30,6 +41,7 @@ public sealed class ProcessBlock : BaseEntity
             throw new InvalidOperationException("Remove links targeting this stage before removing it.");
 
         stages.Remove(stage);
+        SetStagePositions();
     }
 
     public void ReorderStages(IReadOnlyList<Guid> orderedStageIds)
@@ -59,9 +71,19 @@ public sealed class ProcessBlock : BaseEntity
 
         stages.Clear();
         stages.AddRange(reorderedStages);
+        SetStagePositions();
     }
 
     public void ConnectBackward(Guid sourceStageId, Guid targetStageId, int maxRepeats)
+    {
+        var source = GetStage(sourceStageId);
+        if (source.BackwardLink is not null)
+            throw new InvalidOperationException("The stage already has a backward link.");
+
+        SetBackwardLink(sourceStageId, targetStageId, maxRepeats);
+    }
+
+    public void SetBackwardLink(Guid sourceStageId, Guid targetStageId, int maxRepeats)
     {
         if (maxRepeats <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxRepeats), "The repeat limit must be positive.");
@@ -72,8 +94,6 @@ public sealed class ProcessBlock : BaseEntity
         var targetIndex = stages.IndexOf(target);
         if (targetIndex >= sourceIndex)
             throw new ArgumentException("A backward link must target an earlier stage.", nameof(targetStageId));
-        if (source.BackwardLink is not null)
-            throw new InvalidOperationException("The stage already has a backward link.");
 
         source.SetBackwardLink(new ProcessStageBackwardLink(targetStageId, maxRepeats));
     }
@@ -105,4 +125,12 @@ public sealed class ProcessBlock : BaseEntity
     private ProcessStage GetStage(Guid stageId) =>
         stages.SingleOrDefault(stage => stage.Id == stageId)
         ?? throw new ArgumentException("The stage does not belong to this ProcessBlock.", nameof(stageId));
+
+    private void SetStagePositions()
+    {
+        for (var index = 0; index < stages.Count; index++)
+            stages[index].SetPosition(index);
+    }
+
+    internal void SetPosition(int position) => Position = position;
 }

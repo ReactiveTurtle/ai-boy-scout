@@ -21,6 +21,7 @@ await using (var scope = app.Services.CreateAsyncScope())
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
 app.MapProjectEndpoints();
+app.MapProcessEndpoints();
 app.MapHub<ProjectHub>("/hubs/projects");
 
 app.Run();

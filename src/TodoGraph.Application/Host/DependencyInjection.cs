@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using TodoGraph.Application.Projects.Commands;
 using TodoGraph.Application.Projects.Queries;
+using TodoGraph.Application.Processes;
 
 namespace TodoGraph.Application.Host;
 
@@ -12,6 +13,7 @@ public static class DependencyInjection
         services.AddScoped<CreateProjectTaskCommandHandler>();
         services.AddScoped<ListProjectsQueryHandler>();
         services.AddScoped<ListProjectTasksQueryHandler>();
+        services.AddScoped<ProcessCatalogHandler>();
         return services;
     }
 }

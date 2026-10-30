@@ -4,14 +4,19 @@ namespace TodoGraph.Domain.Processes;
 
 public sealed class ProcessStage : BaseEntity
 {
+    private ProcessStage() => Instructions = string.Empty;
+
     internal ProcessStage(string instructions) => Instructions = Required(instructions);
 
-    public string Instructions { get; private set; }
+    public int Position { get; private set; }
+    public string Instructions { get; private set; } = string.Empty;
     public ProcessStageBackwardLink? BackwardLink { get; private set; }
 
     internal void UpdateInstructions(string instructions) => Instructions = Required(instructions);
 
     internal void SetBackwardLink(ProcessStageBackwardLink? backwardLink) => BackwardLink = backwardLink;
+
+    internal void SetPosition(int position) => Position = position;
 
     internal ProcessStageSnapshot CaptureSnapshot() => ProcessStageSnapshot.Create(this);
 

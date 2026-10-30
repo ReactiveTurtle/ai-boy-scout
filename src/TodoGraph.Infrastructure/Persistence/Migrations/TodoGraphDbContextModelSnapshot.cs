@@ -17,6 +17,20 @@ namespace TodoGraph.Infrastructure.Persistence.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.10");
 
+            modelBuilder.Entity("TodoGraph.Domain.Processes.Process", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("processes", (string)null);
+                });
+
             modelBuilder.Entity("TodoGraph.Domain.Projects.Project", b =>
                 {
                     b.Property<Guid>("Id")
@@ -33,6 +47,82 @@ namespace TodoGraph.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("projects", (string)null);
+                });
+
+            modelBuilder.Entity("TodoGraph.Domain.Processes.Process", b =>
+                {
+                    b.OwnsMany("TodoGraph.Domain.Processes.ProcessBlock", "Blocks", b1 =>
+                        {
+                            b1.Property<Guid>("Id")
+                                .HasColumnType("TEXT");
+
+                            b1.Property<int>("Position")
+                                .HasColumnType("INTEGER");
+
+                            b1.Property<Guid>("ProcessId")
+                                .HasColumnType("TEXT");
+
+                            b1.HasKey("Id");
+
+                            b1.HasIndex("ProcessId", "Position");
+
+                            b1.ToTable("process_blocks", (string)null);
+
+                            b1.WithOwner()
+                                .HasForeignKey("ProcessId");
+
+                            b1.OwnsMany("TodoGraph.Domain.Processes.ProcessStage", "Stages", b2 =>
+                                {
+                                    b2.Property<Guid>("Id")
+                                        .HasColumnType("TEXT");
+
+                                    b2.Property<string>("Instructions")
+                                        .IsRequired()
+                                        .HasColumnType("TEXT");
+
+                                    b2.Property<int>("Position")
+                                        .HasColumnType("INTEGER");
+
+                                    b2.Property<Guid>("ProcessBlockId")
+                                        .HasColumnType("TEXT");
+
+                                    b2.HasKey("Id");
+
+                                    b2.HasIndex("ProcessBlockId", "Position");
+
+                                    b2.ToTable("process_stages", (string)null);
+
+                                    b2.WithOwner()
+                                        .HasForeignKey("ProcessBlockId");
+
+                                    b2.OwnsOne("TodoGraph.Domain.Processes.ProcessStageBackwardLink", "BackwardLink", b3 =>
+                                        {
+                                            b3.Property<Guid>("ProcessStageId")
+                                                .HasColumnType("TEXT");
+
+                                            b3.Property<int>("MaxRepeats")
+                                                .HasColumnType("INTEGER")
+                                                .HasColumnName("BackwardMaxRepeats");
+
+                                            b3.Property<Guid>("TargetStageId")
+                                                .HasColumnType("TEXT")
+                                                .HasColumnName("BackwardTargetStageId");
+
+                                            b3.HasKey("ProcessStageId");
+
+                                            b3.ToTable("process_stages");
+
+                                            b3.WithOwner()
+                                                .HasForeignKey("ProcessStageId");
+                                        });
+
+                                    b2.Navigation("BackwardLink");
+                                });
+
+                            b1.Navigation("Stages");
+                        });
+
+                    b.Navigation("Blocks");
                 });
 
             modelBuilder.Entity("TodoGraph.Domain.Projects.Project", b =>

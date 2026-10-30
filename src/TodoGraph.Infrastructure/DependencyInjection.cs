@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using TodoGraph.Application.Processes;
 using TodoGraph.Application.Projects;
 using TodoGraph.Infrastructure.Persistence;
 using TodoGraph.Infrastructure.Persistence.Repositories;
@@ -20,6 +21,7 @@ public static class DependencyInjection
             connectionString,
             sqlite => sqlite.MigrationsAssembly(typeof(TodoGraphDbContext).Assembly.GetName().Name)));
         services.AddScoped<IProjectRepository, EfProjectRepository>();
+        services.AddScoped<IProcessRepository, EfProcessRepository>();
         return services;
     }
 }
