@@ -44,3 +44,8 @@ The user specified that a Process must not be empty. The catalog may construct i
 - Removing the final stage throws `InvalidOperationException` without changing the aggregate.
 - Release solution build passed with 0 warnings and 0 errors.
 - A temporary runtime smoke passed for required initial stage data, stage editing/reordering, successful removal when multiple stages exist, and rejection/no mutation when removing the final stage. The temporary harness source was removed.
+
+## Topic evolution
+
+- The user clarified that stages belong to ProcessBlocks, and blocks connect inside a Process.
+- The non-empty Process invariant remains; its placement across Process and ProcessBlock will be carried into the refactor in ITR-018.

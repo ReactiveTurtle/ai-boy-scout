@@ -2,66 +2,63 @@ using Common.Domain;
 
 namespace TodoGraph.Domain.Processes;
 
-/// <summary>A global process definition with an explicitly ordered set of stages.</summary>
+/// <summary>A global process definition with an explicitly ordered set of blocks.</summary>
 public sealed class Process : AggregateRoot
 {
-    private readonly List<ProcessStage> stages = [];
+    private readonly List<ProcessBlock> blocks = [];
 
     private Process(string name, string initialStageInstructions)
     {
         Name = Required(name, nameof(name));
-        stages.Add(new ProcessStage(initialStageInstructions));
+        blocks.Add(new ProcessBlock(initialStageInstructions));
     }
 
     public string Name { get; private set; }
-    public IReadOnlyList<ProcessStage> Stages => stages.AsReadOnly();
+    public IReadOnlyList<ProcessBlock> Blocks => blocks.AsReadOnly();
 
     public static Process Create(string name, string initialStageInstructions) => new(name, initialStageInstructions);
 
     public void Rename(string name) => Name = Required(name, nameof(name));
 
-    public ProcessStage AddStage(string instructions)
+    public ProcessBlock AddBlock(string initialStageInstructions)
     {
-        var stage = new ProcessStage(instructions);
-        stages.Add(stage);
-        return stage;
+        var block = new ProcessBlock(initialStageInstructions);
+        blocks.Add(block);
+        return block;
     }
 
-    public void UpdateStageInstructions(Guid stageId, string instructions) =>
-        GetStage(stageId).UpdateInstructions(instructions);
-
-    public void RemoveStage(Guid stageId)
+    public void RemoveBlock(Guid blockId)
     {
-        var stage = GetStage(stageId);
-        if (stages.Count == 1)
-            throw new InvalidOperationException("A Process must contain at least one stage.");
+        var block = GetBlock(blockId);
+        if (blocks.Count == 1)
+            throw new InvalidOperationException("A Process must contain at least one block.");
 
-        stages.Remove(stage);
+        blocks.Remove(block);
     }
 
-    public void ReorderStages(IReadOnlyList<Guid> orderedStageIds)
+    public void ReorderBlocks(IReadOnlyList<Guid> orderedBlockIds)
     {
-        ArgumentNullException.ThrowIfNull(orderedStageIds);
+        ArgumentNullException.ThrowIfNull(orderedBlockIds);
 
-        var currentStageIds = stages.Select(stage => stage.Id).ToHashSet();
-        if (orderedStageIds.Count != stages.Count ||
-            orderedStageIds.Distinct().Count() != stages.Count ||
-            !currentStageIds.SetEquals(orderedStageIds))
+        var currentBlockIds = blocks.Select(block => block.Id).ToHashSet();
+        if (orderedBlockIds.Count != blocks.Count ||
+            orderedBlockIds.Distinct().Count() != blocks.Count ||
+            !currentBlockIds.SetEquals(orderedBlockIds))
         {
             throw new ArgumentException(
-                "The new order must contain every Process stage exactly once.",
-                nameof(orderedStageIds));
+                "The new order must contain every ProcessBlock exactly once.",
+                nameof(orderedBlockIds));
         }
 
-        var stagesById = stages.ToDictionary(stage => stage.Id);
-        var reorderedStages = orderedStageIds.Select(stageId => stagesById[stageId]).ToArray();
-        stages.Clear();
-        stages.AddRange(reorderedStages);
+        var blocksById = blocks.ToDictionary(block => block.Id);
+        var reorderedBlocks = orderedBlockIds.Select(blockId => blocksById[blockId]).ToArray();
+        blocks.Clear();
+        blocks.AddRange(reorderedBlocks);
     }
 
-    private ProcessStage GetStage(Guid stageId) =>
-        stages.SingleOrDefault(stage => stage.Id == stageId)
-        ?? throw new ArgumentException("The stage does not belong to this Process.", nameof(stageId));
+    private ProcessBlock GetBlock(Guid blockId) =>
+        blocks.SingleOrDefault(block => block.Id == blockId)
+        ?? throw new ArgumentException("The block does not belong to this Process.", nameof(blockId));
 
     private static string Required(string? value, string parameterName)
     {

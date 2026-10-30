@@ -28,9 +28,9 @@ state: accepted
 3. A task is created from a required Description only. Its Title is empty until AI populates it.
 4. A Process is explicitly selected when starting a task; creation does not auto-start a default process.
 5. AI may update both Title and Description.
-6. A Process is a named, ordered stage list. Each stage has AI instructions and may participate in conditional transitions or wait for user input.
+6. A Process is a named sequence of ProcessBlocks. Each block contains ordered stages; execution has no branches or parallelism. A bounded backward link may connect stages.
 7. Starting a task captures a Process snapshot; later definition changes do not change that task's running workflow.
-8. Stage snapshots use SHA-256 over all behavior-affecting content except the stage entity's own Id. Process snapshots store ordered `(StageId, StageHash)` references, so reordering reuses unchanged stage snapshots.
+8. Stage snapshots use SHA-256 over all behavior-affecting content except the stage entity's own Id. ProcessBlock snapshots store ordered `(StageId, StageHash)` references, and the Process snapshot stores ordered blocks.
 
 ## Topic evolution
 
@@ -39,10 +39,13 @@ state: accepted
 
 ## Follow-up decisions and open rules — 2026-10-30
 
-- A Process definition must contain at least one Stage.
-- Branches are predicate-based; the predicate operands and evaluator contract are not yet specified.
+- A Process must contain at least one ProcessBlock, and each ProcessBlock must contain at least one Stage.
+- The user first selected predicate-based transitions, then clarified the current workflow should have no branching or parallelism; predicate execution is deferred and ITR-017 is superseded.
 - A waiting stage presents a prompt, accepts free-text user input, and resumes that same stage.
-- A Process can be connected to another Process. Whether this is a completion chain, a stage-level edge, or a catalog-only relation—and how it affects a running snapshot—remains to be specified in ITR-016.
+- A ProjectTask starting a Process captures its full block graph at task start.
+- Backward links connect a stage to an earlier stage in the same ProcessBlock. Each link has a per-cycle repeat limit; exceeding it blocks the run with an error.
+- The latest user clarification is to implement the simple sequential workflow without parallel execution or branching.
+- The user clarified that blocks connect within a Process; this supersedes the earlier interpretation that one Process connects to another.
 
 ## Current boundary
 

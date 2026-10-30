@@ -18,13 +18,18 @@ Define which immutable stage data contributes to a stage snapshot hash so Proces
 
 ## Decision
 
-- Hash a canonical serialization of every behavior-affecting stage field, excluding only the stage entity's own Id: AI instructions, actor/outcome policy, and conditional transitions with target-stage references.
-- Keep stage ordering in the Process snapshot as an ordered list of `(StageId, StageHash)` references, so reordering does not rewrite unchanged stage snapshots.
+- Hash a canonical serialization of every behavior-affecting stage field, excluding only the stage entity's own Id. Currently this includes AI instructions and stage-link behavior.
+- Keep stage ordering in a ProcessBlock snapshot as an ordered list of `(StageId, StageHash)` references; keep ProcessBlock ordering in the Process snapshot, so reordering does not rewrite unchanged stage snapshots.
 - Use SHA-256 lowercase hexadecimal output and an immutable snapshot store keyed by that value.
 
 ## Human decision
 
 The user chose to hash the full behavior definition except the stage entity's own Id. The ordered Process snapshot retains `(StageId, StageHash)` references.
+
+## Follow-up decision — 2026-10-30
+
+- A ProjectTask starting a Process captures the full graph of ProcessBlocks in that Process.
+- A stage backward link's target StageId and per-cycle repeat limit affect behavior and therefore contribute to the owning stage's canonical hash.
 
 ## Out of scope
 

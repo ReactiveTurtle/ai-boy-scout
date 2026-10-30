@@ -50,3 +50,9 @@ The accepted decisions establish a global named Process with an ordered list of 
 - `dotnet build BoyScout.sln --configuration Release --no-restore -m:1 -p:OutDir=<approved temp output>` passed with 0 warnings and 0 errors.
 - A temporary runtime smoke verified append order, stable stage identity through edits/reordering, rejection of invalid reorder/update/remove requests, and no partial mutation after rejected operations. It passed; the temporary harness source was removed.
 - Conditional transitions, user waits, process snapshots/hash, persistence, endpoints, and UI were not implemented or tested in this iteration.
+
+## Topic evolution
+
+- Initial model: Process directly owned an ordered stage list.
+- User clarification: a Process is composed of ProcessBlocks; each block contains stages and blocks connect within the Process.
+- The direct Process-to-stage ownership in this iteration is superseded by the ProcessBlock model; preserve stage identity/instruction behavior while refactoring in ITR-018.

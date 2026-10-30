@@ -2,23 +2,21 @@
 id: ITR-017
 topic: Define the data context and evaluator for stage predicates
 type: decision
-state: proposed
+state: abandoned
 ---
 
 ## Expected result
 
 Define which stage/run values predicates inspect and whether the application or AI evaluates them, before adding predicate behavior to the domain.
 
-## User decision so far
+## Initial user decision
 
-The user selected predicate-based stage transitions.
+The user selected predicate-based transitions evaluated by application code against structured stage results.
 
-## Open questions
+## Topic evolution
 
-- Are predicates evaluated by application code or interpreted by AI?
-- Which values are available to a predicate: structured stage output, updated ProjectTask Title/Description, user response, or another explicit result model?
-- What happens when no outgoing predicate matches or more than one matches?
+The user later clarified: “Без параллельности и ветвлений”. Predicate-driven routing is deferred for the requested simple sequential version; the stage result schema for routing is not needed in this scope.
 
-## Out of scope until clarified
+## Superseded scope
 
-- Predicate syntax, evaluation, transition persistence, and inclusion in stage hashes.
+- Predicate schema, evaluation, transition persistence, and inclusion in stage hashes are not part of the current sequential model.
