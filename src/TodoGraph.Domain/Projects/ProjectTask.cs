@@ -29,6 +29,14 @@ public sealed class ProjectTask : BaseEntity
         CurrentProcessRun.CompleteCurrentStage(this, result);
     }
 
+    public void SubmitProcessUserResponse(string response)
+    {
+        if (CurrentProcessRun is null)
+            throw new InvalidOperationException("The ProjectTask has not started a Process.");
+
+        CurrentProcessRun.SubmitUserResponse(response);
+    }
+
     public void ApplyProcessUpdate(string? title, string? description)
     {
         if (title is null && description is null)

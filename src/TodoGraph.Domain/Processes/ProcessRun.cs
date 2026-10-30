@@ -20,6 +20,8 @@ public sealed class ProcessRun : BaseEntity
     public ProcessRunStatus Status { get; private set; } = ProcessRunStatus.Running;
     public Guid? CurrentBlockId { get; private set; }
     public Guid? CurrentStageId { get; private set; }
+    public string? CurrentUserPrompt { get; private set; }
+    public string? PendingUserResponse { get; private set; }
     public string? Error { get; private set; }
     public IReadOnlyDictionary<Guid, int> BackwardLinkRepeatCounts =>
         new ReadOnlyDictionary<Guid, int>(new Dictionary<Guid, int>(backwardLinkRepeatCounts));
@@ -39,7 +41,22 @@ public sealed class ProcessRun : BaseEntity
             throw new InvalidOperationException("Only a running ProcessRun can complete a stage.");
 
         var current = ResolveCurrentStage();
-        task.ApplyProcessUpdate(result.Title, result.Description);
+        var prompt = result.UserPrompt is null ? null : RequiredPrompt(result.UserPrompt);
+        var hasTaskUpdate = result.Title is not null || result.Description is not null;
+        if (!hasTaskUpdate && prompt is null)
+            throw new ArgumentException("A completed stage must update the ProjectTask or wait for user input.", nameof(result));
+
+        if (hasTaskUpdate)
+            task.ApplyProcessUpdate(result.Title, result.Description);
+
+        CurrentUserPrompt = null;
+        PendingUserResponse = null;
+        if (prompt is not null)
+        {
+            CurrentUserPrompt = prompt;
+            Status = ProcessRunStatus.WaitingForUser;
+            return;
+        }
 
         if (current.Stage.BackwardLink is { } backwardLink)
         {
@@ -58,6 +75,17 @@ public sealed class ProcessRun : BaseEntity
         }
 
         AdvanceSequentially(current.BlockIndex, current.StageIndex);
+    }
+
+    internal void SubmitUserResponse(string response)
+    {
+        if (Status != ProcessRunStatus.WaitingForUser || CurrentUserPrompt is null)
+            throw new InvalidOperationException("The ProcessRun is not waiting for user input.");
+
+        var normalizedResponse = RequiredPrompt(response, nameof(response));
+        PendingUserResponse = normalizedResponse;
+        CurrentUserPrompt = null;
+        Status = ProcessRunStatus.Running;
     }
 
     private void AdvanceSequentially(int blockIndex, int stageIndex)
@@ -104,6 +132,14 @@ public sealed class ProcessRun : BaseEntity
         }
 
         throw new InvalidOperationException("The current stage is not present in the ProcessRun snapshot.");
+    }
+
+    private static string RequiredPrompt(string? prompt, string parameterName = "prompt")
+    {
+        var normalized = prompt?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            throw new ArgumentException("User prompts and responses must not be empty.", parameterName);
+        return normalized;
     }
 
     private sealed record CurrentStage(
