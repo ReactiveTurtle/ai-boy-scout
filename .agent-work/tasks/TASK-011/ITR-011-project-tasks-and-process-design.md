@@ -44,6 +44,8 @@ state: accepted
 - A waiting stage presents a prompt, accepts free-text user input, and resumes that same stage.
 - A ProjectTask starting a Process captures its full block graph at task start.
 - Backward links connect a stage to an earlier stage in the same ProcessBlock. Each link has a per-cycle repeat limit; exceeding it blocks the run with an error.
+- A ProjectTask may have only one ProcessRun total.
+- A completed stage must update Title or Description; a stage waiting for user input may pause without changing either field.
 - The latest user clarification is to implement the simple sequential workflow without parallel execution or branching.
 - The user clarified that blocks connect within a Process; this supersedes the earlier interpretation that one Process connects to another.
 

@@ -21,6 +21,7 @@ internal sealed class ProjectConfiguration : IEntityTypeConfiguration<Project>
             tasks.Property(task => task.Id).ValueGeneratedNever();
             tasks.Property(task => task.Title);
             tasks.Property(task => task.Description).IsRequired();
+            tasks.Ignore(task => task.CurrentProcessRun);
         });
         builder.Navigation(project => project.Tasks).HasField("tasks").UsePropertyAccessMode(PropertyAccessMode.Field);
     }
