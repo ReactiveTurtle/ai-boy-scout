@@ -2,7 +2,7 @@
 id: ITR-023
 topic: Persist and expose ProjectTask ProcessRuns
 type: implementation
-state: proposed
+state: exploring
 ---
 
 ## Expected result
@@ -28,3 +28,8 @@ Starting a Process on a ProjectTask persists its immutable snapshot and runtime 
 
 - AI invocation/worker and frontend implementation.
 - Parallel branches, predicates, cross-ProcessBlock links, or retry/restart after the single run.
+
+## Storage decision pending
+
+- Recommended: relational ProcessRun and run-stage-reference rows, plus a `process_stage_snapshots` table keyed by SHA-256 and repeat counters keyed by the backward-link source StageId. This preserves the accepted content-addressed snapshot model and supports status queries.
+- Alternative: store the complete ProcessRun snapshot/state as one JSON value on the ProjectTask. This is smaller but duplicates stage snapshots across runs and makes run-state queries less direct.
