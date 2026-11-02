@@ -55,3 +55,12 @@ Design the new standalone `TodoGraph.WebApp` for desktop. TodoGraph is a separat
 - Figma link with reusable component styles/tokens and responsive desktop frames.
 - Clickable prototype for the principal flows and empty/error states.
 - Notes for copy, field labels, and any data/API additions the design requires.
+
+## Frontend structure and reuse guidance
+
+- Organize implementation per page: `<page-name>-page/` with `<page>.page.ts` as Controller, `<page>.page.html` as View, and `<page>.page.scss`.
+- Keep Model and ViewModel in the page's `entities/`; the View binds only to ViewModel, never directly to Model.
+- Provide app-wide foundational components in `src/app/core/components/`, cross-page feature reuse in `src/app/shared/`, and page-only reuse in that page's `shared/`.
+- Reuse a component when concrete consumers share behavior and a stable small contract, and extraction reduces change/maintenance cost. Similar appearance alone is not enough; avoid speculative components and components that accumulate page-specific flags.
+- Keep visual tokens and components coherent across desktop frames, while allowing page-specific composition when interaction semantics differ.
+- Detailed Angular code layout and component-generalization criteria are recorded in `src/TodoGraph.WebApp/AGENTS.md`.
