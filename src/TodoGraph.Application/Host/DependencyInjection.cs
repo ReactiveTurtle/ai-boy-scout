@@ -14,6 +14,8 @@ public static class DependencyInjection
         services.AddScoped<ListProjectsQueryHandler>();
         services.AddScoped<ListProjectTasksQueryHandler>();
         services.AddScoped<ProcessCatalogHandler>();
+        services.AddScoped<ProcessRunHandler>();
+        services.AddScoped<ProcessRunHandler>();
         return services;
     }
 }

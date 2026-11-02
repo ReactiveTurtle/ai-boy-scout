@@ -20,6 +20,15 @@ public sealed class ProjectTask : BaseEntity
         CurrentProcessRun = ProcessRun.Start(process.CaptureSnapshot());
     }
 
+    public void RestoreProcessRun(ProcessRun processRun)
+    {
+        ArgumentNullException.ThrowIfNull(processRun);
+        if (CurrentProcessRun is not null)
+            throw new InvalidOperationException("The ProjectTask already has a ProcessRun.");
+
+        CurrentProcessRun = processRun;
+    }
+
     public void CompleteCurrentProcessStage(ProcessStageResult result)
     {
         ArgumentNullException.ThrowIfNull(result);

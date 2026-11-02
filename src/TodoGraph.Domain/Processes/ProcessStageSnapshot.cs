@@ -27,12 +27,25 @@ public sealed class ProcessStageSnapshot
 
     internal static ProcessStageSnapshot Create(ProcessStage stage)
     {
-        var content = new StageBehavior(
-            stage.Instructions,
-            stage.BackwardLink is { } link ? new BackwardLinkBehavior(link.TargetStageId, link.MaxRepeats) : null);
-        var serialized = JsonSerializer.SerializeToUtf8Bytes(content, JsonOptions);
-        var hash = Convert.ToHexString(SHA256.HashData(serialized)).ToLowerInvariant();
+        var hash = ComputeHash(stage.Instructions, stage.BackwardLink);
         return new ProcessStageSnapshot(hash, stage.Instructions, stage.BackwardLink);
+    }
+
+    public static ProcessStageSnapshot Rehydrate(string hash, string instructions, ProcessStageBackwardLink? backwardLink)
+    {
+        if (string.IsNullOrWhiteSpace(hash) || ComputeHash(instructions, backwardLink) != hash)
+            throw new ArgumentException("Stage snapshot hash does not match its content.", nameof(hash));
+
+        return new ProcessStageSnapshot(hash, instructions, backwardLink);
+    }
+
+    private static string ComputeHash(string instructions, ProcessStageBackwardLink? backwardLink)
+    {
+        var content = new StageBehavior(
+            instructions,
+            backwardLink is { } link ? new BackwardLinkBehavior(link.TargetStageId, link.MaxRepeats) : null);
+        var serialized = JsonSerializer.SerializeToUtf8Bytes(content, JsonOptions);
+        return Convert.ToHexString(SHA256.HashData(serialized)).ToLowerInvariant();
     }
 
     private sealed record StageBehavior(

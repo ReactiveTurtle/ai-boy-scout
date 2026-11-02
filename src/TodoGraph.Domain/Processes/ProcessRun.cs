@@ -10,6 +10,12 @@ public sealed class ProcessRun : BaseEntity
     private readonly Dictionary<Guid, int> backwardLinkRepeatCounts = [];
 
     private ProcessRun(ProcessSnapshot snapshot)
+        : this(Guid.NewGuid(), snapshot)
+    {
+    }
+
+    private ProcessRun(Guid id, ProcessSnapshot snapshot)
+        : base(id)
     {
         Snapshot = snapshot;
         CurrentBlockId = snapshot.Blocks[0].BlockId;
@@ -33,6 +39,58 @@ public sealed class ProcessRun : BaseEntity
             throw new ArgumentException("A ProcessRun requires at least one block and stage.", nameof(snapshot));
 
         return new ProcessRun(snapshot);
+    }
+
+    public static ProcessRun Rehydrate(
+        Guid id,
+        ProcessSnapshot snapshot,
+        ProcessRunStatus status,
+        Guid? currentBlockId,
+        Guid? currentStageId,
+        string? currentUserPrompt,
+        string? pendingUserResponse,
+        string? error,
+        IReadOnlyDictionary<Guid, int> repeatCounts)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(repeatCounts);
+        if (!Enum.IsDefined(status))
+            throw new ArgumentOutOfRangeException(nameof(status));
+        if (status is ProcessRunStatus.Running or ProcessRunStatus.WaitingForUser)
+        {
+            if (!currentBlockId.HasValue || !currentStageId.HasValue)
+                throw new ArgumentException("An active ProcessRun must have a current block and stage.");
+        }
+        if (status == ProcessRunStatus.WaitingForUser && string.IsNullOrWhiteSpace(currentUserPrompt))
+            throw new ArgumentException("A waiting ProcessRun must have a user prompt.", nameof(currentUserPrompt));
+        if (status != ProcessRunStatus.WaitingForUser && currentUserPrompt is not null)
+            throw new ArgumentException("Only a waiting ProcessRun may have an active user prompt.", nameof(currentUserPrompt));
+        if (status == ProcessRunStatus.Blocked && string.IsNullOrWhiteSpace(error))
+            throw new ArgumentException("A blocked ProcessRun must have an error.", nameof(error));
+
+        var run = new ProcessRun(id, snapshot)
+        {
+            Status = status,
+            CurrentBlockId = currentBlockId,
+            CurrentStageId = currentStageId,
+            CurrentUserPrompt = currentUserPrompt,
+            PendingUserResponse = pendingUserResponse,
+            Error = error,
+        };
+        foreach (var (stageId, count) in repeatCounts)
+        {
+            if (count <= 0) throw new ArgumentException("Repeat counts must be positive.", nameof(repeatCounts));
+            var stageReference = snapshot.Blocks
+                .SelectMany(block => block.Stages)
+                .SingleOrDefault(reference => reference.StageId == stageId)
+                ?? throw new ArgumentException("A repeat counter references a stage outside the snapshot.", nameof(repeatCounts));
+            var stageSnapshot = snapshot.StageSnapshots.Single(item => item.Hash == stageReference.StageHash);
+            if (stageSnapshot.BackwardLink is null || count > stageSnapshot.BackwardLink.MaxRepeats)
+                throw new ArgumentException("A repeat counter exceeds its backward-link limit.", nameof(repeatCounts));
+            run.backwardLinkRepeatCounts.Add(stageId, count);
+        }
+
+        return run;
     }
 
     internal void CompleteCurrentStage(ProjectTask task, ProcessStageResult result)

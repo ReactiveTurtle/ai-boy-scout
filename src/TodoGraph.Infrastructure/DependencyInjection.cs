@@ -22,6 +22,7 @@ public static class DependencyInjection
             sqlite => sqlite.MigrationsAssembly(typeof(TodoGraphDbContext).Assembly.GetName().Name)));
         services.AddScoped<IProjectRepository, EfProjectRepository>();
         services.AddScoped<IProcessRepository, EfProcessRepository>();
+        services.AddScoped<IProcessRunRepository, EfProcessRunRepository>();
         return services;
     }
 }

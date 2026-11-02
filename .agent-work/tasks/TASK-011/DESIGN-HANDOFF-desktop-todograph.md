@@ -35,7 +35,10 @@ Design the new standalone `TodoGraph.WebApp` for desktop. TodoGraph is a separat
 - `POST /api/processes/{processId}/blocks` with `{ initialStageInstructions }`; `PUT /api/processes/{processId}/blocks/order` with `{ blockIds }`; `DELETE /api/processes/{processId}/blocks/{blockId}`.
 - `POST /api/processes/{processId}/blocks/{blockId}/stages` with `{ instructions }`; `PUT /api/processes/{processId}/blocks/{blockId}/stages/{stageId}` with `{ instructions }`; `DELETE` the stage route; `PUT .../stages/order` with `{ stageIds }`.
 - `PUT /api/processes/{processId}/blocks/{blockId}/stages/{stageId}/backward-link` with `{ targetStageId, maxRepeats }`; `DELETE` that link route.
-- Successful catalog mutations return the updated Process DTO; creation returns `201 Created`. ProcessRun start/result/wait-response endpoints are not implemented yet; treat those as intended flows, not current API contract.
+- Successful catalog mutations return the updated Process DTO; creation returns `201 Created`.
+- `POST /api/projects/{projectId}/tasks/{taskId}/process-run` with `{ processId }` starts the task's one ProcessRun; `GET` on that route returns its status/current position.
+- `POST .../process-run/current-stage-result` accepts `{ title?, description?, userPrompt? }`; `POST .../process-run/user-response` accepts `{ response }`.
+- Stage-result requests are the boundary for a future AI adapter; the API does not invoke AI. ProcessRun status and snapshots persist across API restarts.
 
 ## States and desktop layouts
 

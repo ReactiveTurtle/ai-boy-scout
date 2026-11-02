@@ -49,6 +49,134 @@ namespace TodoGraph.Infrastructure.Persistence.Migrations
                     b.ToTable("projects", (string)null);
                 });
 
+            modelBuilder.Entity("TodoGraph.Infrastructure.Persistence.Entities.ProcessRunBlockRecord", b =>
+                {
+                    b.Property<Guid>("ProcessRunId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("BlockId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("ProcessRunId", "BlockId");
+
+                    b.HasIndex("ProcessRunId", "Position");
+
+                    b.ToTable("process_run_blocks", (string)null);
+                });
+
+            modelBuilder.Entity("TodoGraph.Infrastructure.Persistence.Entities.ProcessRunLinkCounterRecord", b =>
+                {
+                    b.Property<Guid>("ProcessRunId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("BlockId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("SourceStageId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("RepeatCount")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("ProcessRunId", "BlockId", "SourceStageId");
+
+                    b.ToTable("process_run_link_counters", (string)null);
+                });
+
+            modelBuilder.Entity("TodoGraph.Infrastructure.Persistence.Entities.ProcessRunRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("CurrentBlockId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("CurrentStageId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CurrentUserPrompt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Error")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PendingUserResponse")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProcessId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProcessName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProjectTaskId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectTaskId")
+                        .IsUnique();
+
+                    b.ToTable("process_runs", (string)null);
+                });
+
+            modelBuilder.Entity("TodoGraph.Infrastructure.Persistence.Entities.ProcessRunStageRecord", b =>
+                {
+                    b.Property<Guid>("ProcessRunId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("BlockId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("StageId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("StageHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("ProcessRunId", "BlockId", "StageId");
+
+                    b.HasIndex("StageHash");
+
+                    b.HasIndex("ProcessRunId", "BlockId", "Position");
+
+                    b.ToTable("process_run_stages", (string)null);
+                });
+
+            modelBuilder.Entity("TodoGraph.Infrastructure.Persistence.Entities.ProcessStageSnapshotRecord", b =>
+                {
+                    b.Property<string>("Hash")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("BackwardMaxRepeats")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid?>("BackwardTargetStageId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Instructions")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Hash");
+
+                    b.ToTable("process_stage_snapshots", (string)null);
+                });
+
             modelBuilder.Entity("TodoGraph.Domain.Processes.Process", b =>
                 {
                     b.OwnsMany("TodoGraph.Domain.Processes.ProcessBlock", "Blocks", b1 =>
@@ -110,7 +238,7 @@ namespace TodoGraph.Infrastructure.Persistence.Migrations
 
                                             b3.HasKey("ProcessStageId");
 
-                                            b3.ToTable("process_stages");
+                                            b3.ToTable("process_stages", (string)null);
 
                                             b3.WithOwner()
                                                 .HasForeignKey("ProcessStageId");
@@ -153,6 +281,39 @@ namespace TodoGraph.Infrastructure.Persistence.Migrations
                         });
 
                     b.Navigation("Tasks");
+                });
+
+            modelBuilder.Entity("TodoGraph.Infrastructure.Persistence.Entities.ProcessRunBlockRecord", b =>
+                {
+                    b.HasOne("TodoGraph.Infrastructure.Persistence.Entities.ProcessRunRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProcessRunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TodoGraph.Infrastructure.Persistence.Entities.ProcessRunLinkCounterRecord", b =>
+                {
+                    b.HasOne("TodoGraph.Infrastructure.Persistence.Entities.ProcessRunStageRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProcessRunId", "BlockId", "SourceStageId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TodoGraph.Infrastructure.Persistence.Entities.ProcessRunStageRecord", b =>
+                {
+                    b.HasOne("TodoGraph.Infrastructure.Persistence.Entities.ProcessStageSnapshotRecord", null)
+                        .WithMany()
+                        .HasForeignKey("StageHash")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TodoGraph.Infrastructure.Persistence.Entities.ProcessRunBlockRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProcessRunId", "BlockId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 #pragma warning restore 612, 618
         }

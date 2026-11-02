@@ -116,10 +116,10 @@ public sealed class ProcessBlock : BaseEntity
                 stageSnapshotsByHash.Add(snapshot.Hash, snapshot);
             }
 
-            stageReferences.Add(new ProcessStageSnapshotReference(stage.Id, snapshot.Hash));
+            stageReferences.Add(new ProcessStageSnapshotReference(stage.Id, snapshot.Hash, stage.Position));
         }
 
-        return new ProcessBlockSnapshot(Id, stageReferences);
+        return new ProcessBlockSnapshot(Id, Position, stageReferences);
     }
 
     private ProcessStage GetStage(Guid stageId) =>
