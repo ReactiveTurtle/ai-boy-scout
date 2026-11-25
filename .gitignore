@@ -1,9 +1,85 @@
+# Dependencies and generated build output
 node_modules/
 artifacts/
-**/bin/
-**/obj/
-src/BoyScout.Api/wwwroot/
+bin/
+obj/
+dist/
+out-tsc/
+.angular/
+.sass-cache/
+/src/BoyScout.Api/wwwroot/
+/src/TodoGraph.Api/wwwroot/
+
+# Local agent history and application data, not product source.
+# Already tracked files are NOT removed by these rules.
+/.agent-work/
+/.local/
+/data/
+/logs/
+/backups/
+# Keep unknown local state private, but make authorable source visible even
+# when a machine-local exclude ignores the entire .todograph directory.
+!/.todograph/
+/.todograph/*
+!/.todograph/plugins/
+!/.todograph/launch/
+/.todograph/launch/preparation.json
+
+# Runtime databases and their sidecars
 *.db
 *.db-shm
 *.db-wal
+*.db-journal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+*.sqlite3-journal
+
+# Local credentials and overrides; keep distributable configuration examples.
 .env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+!.env.*.example
+!.env.*.sample
+!.env.*.template
+/secrets/
+/.secrets/
+*.pfx
+*.p12
+*.key
+*-private.pem
+*.private.pem
+appsettings.[Ll]ocal.json
+appsettings.*.[Ll]ocal.json
+
+# Test results, browser session state and diagnostics (not test fixtures)
+TestResults/
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+blob-report/
+**/playwright/.auth/
+*.log
+*.bak
+__pycache__/
+*.py[cod]
+
+# Per-user IDE and OS files; shared editor configuration remains versioned.
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.DS_Store
+Thumbs.db
+
+# Deliberately keep plugin source (including .todograph/plugins), migrations,
+# shared agent skills and safe appsettings files. Project-specific code must
+# be relocated with its dependencies, never hidden here to mask build inputs.
